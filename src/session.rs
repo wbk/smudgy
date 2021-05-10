@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bytes::BufMut;
 use futures::SinkExt;
 use tokio::{net::TcpStream, sync::mpsc};
 use tokio_stream::StreamExt;
@@ -16,6 +17,7 @@ use self::{handler::Handler, lines_in_codec::LinesInCodec, unauthenticated::Unau
 mod handler;
 mod lines_in_codec;
 mod motd;
+mod signup;
 mod unauthenticated;
 
 const MAX_INPUT_LINE_LENGTH: usize = 120;
@@ -70,43 +72,60 @@ impl Session {
     }
 
     pub async fn process(stream: TcpStream) {
-        if let Some(mut session) = Session::new(stream).await {
-            loop {
-                tokio::select! {
-                    result = session.connection.next() => {
-                        match result {
-                        None => break,
-                        Some(Ok(msg)) => {
-                            if let Err(e) = session.handle(msg.as_str()).await {
-                                println!("Error occured in session.handle: {:?}", e);
-                                break;
-                            }
-                        },
-                        Some(Err(e)) => {
-                            println!("An error occured: {:?}", e);
+        let mut session = match Session::new(stream).await {
+            Some(it) => it,
+            _ => return,
+        };
+        loop {
+            tokio::select! {
+                result = session.connection.next() => {
+                    match result {
+                    None => break,
+                    Some(Ok(msg)) => {
+                        if let Err(e) = session.handle(msg.as_str()).await {
+                            println!("Error occured in session.handle: {:?}", e);
+                            break;
+                        }
+                    },
+                    Some(Err(e)) => {
+                        println!("An error occured: {:?}", e);
+                        break;
+                    }
+                }
+            }
+
+                recv = session.rx.recv() => match recv {
+                    None => break,
+                    Some(Message::Close) => break,
+                    Some(Message::Buffered(msg)) => {
+                        if session.connection.feed(msg).await.is_err() {
                             break;
                         }
                     }
-                }
+                    Some(Message::Flushed(msg)) => {
+                        if session.connection.feed(msg).await.is_err() {
+                            break;
+                        }
 
-                    recv = session.rx.recv() => match recv {
-                        None => break,
-                        Some(Message::Close) => break,
-                        Some(Message::Buffered(msg)) => {
-                            if session.connection.feed(msg).await.is_err() {
-                                break;
-                            }
+                        session.send_iac_ga();
+
+                        if session.connection.send(String::from("")).await.is_err() {
+                            break;
                         }
-                        Some(Message::Flushed(msg)) => {
-                            if session.connection.send(msg).await.is_err() {
-                                break;
-                            }
-                        }
-                    },
-                }
+                    }
+                },
             }
-            println!("{} disconnected", session.peer_address);
         }
+
+        println!("{} disconnected", session.peer_address);
+    }
+
+    fn send_iac_ga(&mut self) {
+        println!("Sending IAC GA to {}", self.peer_address);
+
+        let buffer = self.connection.write_buffer_mut();
+        buffer.reserve(2);
+        buffer.put(&b"\xff\xf9"[..]);
     }
 
     async fn handle(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
@@ -115,7 +134,9 @@ impl Session {
         let response = handler.handle(msg);
 
         if let Some(msg) = response.msg {
-            self.connection.send(msg).await?;
+            self.connection.feed(msg).await?;
+            self.send_iac_ga();
+            self.connection.send(String::from("")).await?;
         }
 
         if let Some(handler) = response.new_handler {
@@ -134,11 +155,10 @@ impl Session {
 
 /// Broadcast a message to all connected sessions.
 ///
-/// ```
-/// let session = Session::new();
+/// ```ignore
+/// use smudgy::session;
 /// session::broadcast("Hello!");
 /// ```
-
 pub fn broadcast(msg: &str) {
     let sessions = Arc::clone(&SESSIONS);
     let mut sessions = sessions.lock().unwrap();

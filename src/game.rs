@@ -1,8 +1,6 @@
 use tokio::time;
 use tokio::time::{Duration, Instant};
 
-use crate::session;
-
 const PULSE_DURATION: Duration = Duration::from_millis(200);
 const PULSES_PER_ROUND: u64 = 10;
 const ROUNDS_PER_TICK: u64 = 10;

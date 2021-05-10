@@ -4,7 +4,8 @@ use tokio_util::codec::Encoder;
 use bytes::{Buf, BufMut, BytesMut};
 use std::{cmp, fmt, io, str, usize};
 
-/// This is tokio_util's [`LinesCodec`], but the Encoder does not transform the input
+/// This is tokio_util's [`LinesCodec`], but the [`Encoder`] leaves the input as-is
+/// rather than appending newlines to all outgoing text
 ///
 /// [`Decoder`]: tokio_util::codec::Decoder
 /// [`Encoder`]: tokio_util::codec::Encoder
@@ -72,16 +73,15 @@ impl LinesInCodec {
 
     /// Returns the maximum line length when decoding.
     ///
-    /// ```
+    /// ```ignore
     /// use std::usize;
-    /// use tokio_util::codec::LinesInCodec;
+    /// use smudgy::session::lines_in_codec::LinesInCodec;
     ///
     /// let codec = LinesInCodec::new();
     /// assert_eq!(codec.max_length(), usize::MAX);
     /// ```
-    /// ```
-    /// use tokio_util::codec::LinesInCodec;
-    ///
+    /// ```ignore
+    /// use smudgy::session::lines_in_codec::LinesInCodec;
     /// let codec = LinesInCodec::new_with_max_length(256);
     /// assert_eq!(codec.max_length(), 256);
     /// ```

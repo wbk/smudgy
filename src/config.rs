@@ -11,7 +11,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            bind_address: String::from("127.0.0.1:4040"),
+            bind_address: String::from("0.0.0.0:4040"),
         }
     }
 }
