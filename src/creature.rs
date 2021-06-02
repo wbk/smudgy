@@ -6,6 +6,10 @@ pub enum Position {
     Standing,
 }
 
+pub enum Race {
+    Human,
+}
+
 pub trait Creature {
     fn broadcast(msg: &str);
 }

@@ -12,15 +12,17 @@ use tokio_util::codec::Framed;
 
 use lazy_static::lazy_static;
 
+use crate::{config, session::handler::Response};
+
 use self::{handler::Handler, lines_in_codec::LinesInCodec, unauthenticated::Unauthenticated};
 
+mod account_menu;
+mod create_character;
 mod handler;
 mod lines_in_codec;
 mod motd;
 mod signup;
 mod unauthenticated;
-
-const MAX_INPUT_LINE_LENGTH: usize = 120;
 
 type Connection = Framed<TcpStream, LinesInCodec>;
 
@@ -51,7 +53,7 @@ impl Session {
 
         let mut connection = Framed::new(
             stream,
-            LinesInCodec::new_with_max_length(MAX_INPUT_LINE_LENGTH),
+            LinesInCodec::new_with_max_length(config::MAX_INPUT_LINE_LENGTH),
         );
 
         if let Some(handler) = Unauthenticated::new(&mut connection).await {
@@ -131,16 +133,23 @@ impl Session {
     async fn handle(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
         let handler = self.handler.as_mut();
 
-        let response = handler.handle(msg);
+        match handler.handle(msg) {
+            Response::Message(msg) => {
+                self.connection.feed(msg).await?;
+                self.send_iac_ga();
+                self.connection.send(String::from("")).await?;
+            }
 
-        if let Some(msg) = response.msg {
-            self.connection.feed(msg).await?;
-            self.send_iac_ga();
-            self.connection.send(String::from("")).await?;
-        }
+            Response::NewHandler(handler) => {
+                self.handler = handler;
+                let preamble = self.handler.preamble();
 
-        if let Some(handler) = response.new_handler {
-            self.handler = handler;
+                if let Some(msg) = preamble {
+                    self.connection.feed(msg).await?;
+                    self.send_iac_ga();
+                    self.connection.send(String::from("")).await?;
+                }
+            }
         }
 
         println!("Message in from {}: {}", self.peer_address, msg);

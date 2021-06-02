@@ -7,13 +7,24 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+argonautica = "0.2.0"
 bytes = "1"
-confy = "0.4.0"
 futures = { version = "0.3.0"}
 lazy_static = "1.4.0"
+quick-error = "2.0.1"
+rand = { version = "0.8.3" }
 regex = "1.5.4"
 serde = { version = "1.0", features = ["derive"] }
+snafu = "0.6.10"
 tokio = { version = "1.5.0", features = ["full"] }
 tokio-stream = "0.1.5"
 tokio-util = { version = "0.6.6", features = ["codec"]}
+toml = "0.5"
 validator = { version = "0.12", features = ["derive", "unic"] }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "dice_rolls"
+harness = false

@@ -1,0 +1,3 @@
+login = "Bort"
+password_hash = "$argon2id$v=19$m=4096,t=192,p=16$pXfZQG6xeDF28dmbKJdIk5eWXpsGyVx/jpV8KO9DMOM$V8RHvMdXobW/5LB8nmXxG+TpQfE5OQAbrBloJspNW40"
+email = "wkalata@gmail.com"

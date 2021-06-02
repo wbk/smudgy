@@ -2,18 +2,18 @@ use tokio::net::TcpListener;
 
 mod account;
 mod config;
+mod creature;
+pub mod dice;
 mod game;
 mod session;
-
-use config::CONFIG;
 
 use game::Game;
 use session::Session;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Binding to {}...", CONFIG.get_bind_address());
+    println!("Binding to {}...", config::BIND_ADDRESS);
 
-    let listener = TcpListener::bind(CONFIG.get_bind_address())
+    let listener = TcpListener::bind(config::BIND_ADDRESS)
         .await
         .expect("Could not bind to address.");
 

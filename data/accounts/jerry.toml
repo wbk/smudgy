@@ -1,0 +1,3 @@
+login = "jerry"
+password_hash = "$argon2id$v=19$m=4096,t=192,p=16$+jo0dfZY02dCJZtL6gaEsUoXy3OO46f2EH3EDSADbl8$mHux7qWrzvA4GKDatTcyyGp8W1WTOUCnwV1FqAaLCgc"
+email = "jerry@j.com"

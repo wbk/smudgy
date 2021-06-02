@@ -70,24 +70,6 @@ impl LinesInCodec {
             ..LinesInCodec::new()
         }
     }
-
-    /// Returns the maximum line length when decoding.
-    ///
-    /// ```ignore
-    /// use std::usize;
-    /// use smudgy::session::lines_in_codec::LinesInCodec;
-    ///
-    /// let codec = LinesInCodec::new();
-    /// assert_eq!(codec.max_length(), usize::MAX);
-    /// ```
-    /// ```ignore
-    /// use smudgy::session::lines_in_codec::LinesInCodec;
-    /// let codec = LinesInCodec::new_with_max_length(256);
-    /// assert_eq!(codec.max_length(), 256);
-    /// ```
-    pub fn max_length(&self) -> usize {
-        self.max_length
-    }
 }
 
 fn utf8(buf: &[u8]) -> Result<&str, io::Error> {
