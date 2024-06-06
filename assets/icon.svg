@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="76.074326mm"
+   height="76.074333mm"
+   viewBox="0 0 76.074326 76.074333"
+   version="1.1"
+   id="svg1"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm" />
+  <defs
+     id="defs1">
+    <linearGradient
+       id="linearGradient5"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#33085e;stop-opacity:1;"
+         offset="0"
+         id="stop5" />
+      <stop
+         style="stop-color:#0d1645;stop-opacity:1;"
+         offset="1"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient5"
+       id="linearGradient6"
+       x1="61.663773"
+       y1="13.852007"
+       x2="9.7187471"
+       y2="65.797035"
+       gradientUnits="userSpaceOnUse" />
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-2.3459054,-4.2449688)">
+    <circle
+       style="fill:url(#linearGradient6);fill-opacity:1;stroke-width:0.264999"
+       id="path2"
+       cx="40.383068"
+       cy="42.282131"
+       r="38.037163"
+       inkscape:export-filename="path2.png"
+       inkscape:export-xdpi="16.026432"
+       inkscape:export-ydpi="16.026432" />
+    <text
+       xml:space="preserve"
+       style="font-weight:800;font-size:57.3553px;line-height:0;font-family:'Monaspace Xenon Var';-inkscape-font-specification:'Monaspace Xenon Var Ultra-Bold';fill:#ffffff;fill-opacity:1;stroke-width:0.86168"
+       x="24.268404"
+       y="60.334106"
+       id="text3"><tspan
+         sodipodi:role="line"
+         id="tspan3"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'Monaspace Krypton Var';-inkscape-font-specification:'Monaspace Krypton Var';fill:#ffffff;fill-opacity:1;stroke-width:0.861683"
+         x="24.268404"
+         y="60.334106">&gt;</tspan></text>
+  </g>
+</svg>

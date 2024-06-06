@@ -1,0 +1,98 @@
+import { Palette } from "../globals.slint";
+
+export component ScrollBar inherits Rectangle {
+    in property <bool> enabled;
+    out property <bool> has-hover: i-touch-area.has-hover;
+    in-out property <bool> horizontal;
+    in-out property <int> maximum;
+    in property <int> initial-value;
+    in-out property <int> page-size;
+
+    private property <length> track-size: root.horizontal ? root.width - 2 * root.offset : root.height - 2 * offset;
+    private property <length> step-size: 10px;
+    private property <length> offset: 2px;
+    private property <length> pad: 2px;
+    private property <int> last-value;
+    private property <bool> is-scrolled-to-end: initial-value == maximum;
+
+    background: transparent;
+
+    pure public function value() -> int {
+        !i-touch-area.active && is-scrolled-to-end ? maximum : last-value
+    }
+
+    states [
+        hover when i-touch-area.has-hover : {
+            background: Palette.button-secondary-bg.with-alpha(0.2);
+            i-border.background: Palette.button-secondary-bg.with-alpha(0.2);
+            i-thumb.opacity: 0.6;
+            pad: 4px;
+        }
+    ]
+
+    animate width, height, pad, background { duration: 150ms; easing: ease-out; }
+
+    i-border := Rectangle {
+        x: 0;
+        y: 0;
+        width: !root.horizontal ? 0.8px : parent.width;
+        height: !root.horizontal ? parent.height : 0.8px;
+        background: transparent;
+    }
+
+    i-thumb := Rectangle {
+        width: !root.horizontal ? parent.width - 2 * root.pad : 1px * root.maximum <= 0phx ? 0phx : max(32px, root.track-size * root.page-size / (root.maximum + root.page-size));
+        height: root.horizontal ? parent.height - 2 * root.pad : 1px * root.maximum <= 0phx ? 0phx : max(32px, root.track-size * (root.page-size / (root.maximum + root.page-size)));
+        x: !root.horizontal ? (parent.width - self.width) / 2 : root.offset + (root.track-size - i-thumb.width) * (value() / root.maximum);
+        y: root.horizontal ? (parent.height - self.height) / 2 : root.offset + (root.track-size - i-thumb.height) * (value() / root.maximum);
+        border-radius: (root.horizontal ? self.height : self.width) / 2;
+        background: Palette.button-secondary-bg;
+        opacity: 0.2;
+        border-width: 0.8px;
+        border-color: Palette.button-secondary-color;
+
+        animate width, height, opacity { duration: 50ms; easing: ease-in; }
+    }
+
+    i-touch-area := TouchArea {
+        property <int> pressed-value;
+        property <bool> active: false;
+
+        width: parent.width;
+        height: parent.height;
+
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                last-value = value();
+                self.pressed-value = value();
+                active = true;
+            } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                value(); // this shouldn't be necessary but is
+                active = false;
+            }
+        }
+
+        moved => {
+            if (self.enabled && self.pressed) {
+                last-value = max(0, min(root.maximum, self.pressed-value + (
+                    root.horizontal ? (i-touch-area.mouse-x - i-touch-area.pressed-x) * (root.maximum / (root.track-size - i-thumb.width))
+                               : (i-touch-area.mouse-y - i-touch-area.pressed-y) * (root.maximum / (root.track-size - i-thumb.height))
+                )));
+                is-scrolled-to-end = last-value == maximum;
+            }
+        }
+
+        // scroll-event(event) => {
+        //     if (root.horizontal && event.delta-x != 0) {
+        //         last-value = min(root.maximum, max(0, value() - (event.delta-x)/1px));
+        //         is-scrolled-to-end = last-value == maximum;
+        //         return accept;
+        //     } else if (!root.horizontal && event.delta-y != 0) {
+        //         last-value = min(root.maximum, max(0, value() - (event.delta-y)/1px));
+        //         is-scrolled-to-end = last-value == maximum;
+        //         return accept;
+        //     }
+        //     reject
+        // }
+    }
+}

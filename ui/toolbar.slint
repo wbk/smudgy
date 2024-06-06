@@ -1,0 +1,269 @@
+import { HeroIconsOutline, Palette, SmudgyState } from "./globals.slint";
+import { ThemedText } from "themed.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component ToolbarItem inherits Rectangle {
+    in property <string> label: "Profile";
+    in property <bool> primary: false;
+    width: 128px;
+    height: 48px;
+    background: primary ? Palette.button-primary-bg : Palette.button-secondary-bg;
+    border-width: 0.5pt;
+    border-color: primary ? Palette.button-primary-color : Palette.button-secondary-color;
+    callback clicked <=> touch-area.clicked;
+    out property has-hover <=> touch-area.has-hover;
+    // states [
+    //     has-hover when touch-area.has-hover: {
+    //         in {
+    //             animate background, label-text.color {
+    //                 duration: 65ms;
+    //                 easing: ease-in;
+    //             }
+    //         }
+    //         out {
+    //             animate background, label-text.color {
+    //                 duration: 65ms;
+    //                 easing: ease-out;
+    //             }
+    //         }
+    //     }
+    // ]
+    touch-area := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+    }
+
+    VerticalLayout {
+        alignment: stretch;
+        label-text := ThemedText {
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: label;
+            font-size: 16px;
+            font-weight: 400;
+            color: primary ? Palette.button-primary-color : Palette.button-secondary-color;
+        }
+    }
+}
+
+export component Toolbar inherits VerticalLayout {
+    in property <int> num-sessions;
+    in property <bool> is-full-screen;
+    private property <bool> open: true;
+    callback create-session-clicked;
+    callback fullscreen-clicked;
+    callback configure-clicked;
+    callback automate-clicked;
+    callback map-clicked;
+    callback drag-window;
+
+    function show(show: bool) {
+        open = show;
+    }
+
+    pure function should-appear() -> bool {
+        return open;
+    }
+
+    pure function should-suppress() -> bool {
+        return !open && cover-rect.opacity == 0;
+    }
+    states [
+        has-hover when should-appear(): {
+            border-rect.opacity: 1;
+            cover-rect.opacity: 0.6;
+            toolbar-area.height: 167px;
+            in {
+                animate border-rect.opacity, cover-rect.opacity, toolbar-area.height {
+                    duration: 400ms;
+                    easing: ease-in;
+                }
+            }
+            out {
+                animate border-rect.opacity, cover-rect.opacity, toolbar-area.height {
+                    duration: 1000ms;
+                    easing: ease-out;
+                }
+            }
+        }
+    ]
+    toolbar-area := Rectangle {
+        height: smudgy-logo.height + 1rem;
+        if !should-suppress(): toolbar-touch := TouchArea {
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    drag-window();
+                }
+            }
+            vertical-stretch: 0;
+            Rectangle {
+                toolbar := Rectangle {
+                    states [
+                        has-hover when should-appear(): {
+                            toolbar.opacity: 1;
+                            in {
+                                animate toolbar.opacity {
+                                    duration: 400ms;
+                                    easing: ease-in;
+                                }
+                            }
+                            out {
+                                animate toolbar.opacity {
+                                    duration: 1000ms;
+                                    easing: ease-out;
+                                }
+                            }
+                        }
+                    ]
+                    opacity: 0;
+                    background: Palette.toolbar-background;
+                    Image {
+                        x: root.width - self.width - 24px;
+                        y: 24px;
+                        source: is-full-screen ? HeroIconsOutline.arrows-pointing-in : HeroIconsOutline.arrows-pointing-out;
+                        colorize: Palette.button-secondary-color;
+                        width: 18px;
+                        height: 18px;
+                        fullscreen := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                fullscreen-clicked();
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        x: 0;
+                        y: 0;
+                        padding-top: 24px;
+                        padding-left: 36px;
+                        padding-right: 0px;
+                        spacing: 12px;
+                        Rectangle {
+                            // Should occupy the same amount of space as the logo
+                            height: smudgy-logo-text.height;
+                            width: 1px;
+                        }
+
+                        Rectangle {
+                            ScrollView {
+                                toolbar-layout := HorizontalLayout {
+                                    alignment: stretch;
+                                    spacing: 18px;
+                                    padding-bottom: 18px;
+                                    padding-top: 1px;
+                                    connect := ToolbarItem {
+                                        label: "connect";
+                                        primary: true;
+                                        clicked => {
+                                            open = false;
+                                            create-session-clicked()
+                                        }
+                                    }
+
+                                    configure := ToolbarItem {
+                                        label: "configure";
+                                    }
+
+                                    automate := ToolbarItem {
+                                        label: "automate";
+                                    }
+
+                                    map := ToolbarItem {
+                                        label: "map";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        smudgy-logo := Rectangle {
+            x: 0;
+            y: 0;
+            width: smudgy-logo-text.x + smudgy-logo-text.width;
+            height: smudgy-logo-text.y + smudgy-logo-text.height;
+
+            states [
+                should-appear when should-appear(): {
+                    smudgy-logo-text.font-size: 48px;
+                    smudgy-logo-text.font-weight: 100;
+                    smudgy-logo-text.color: rgba(255, 255, 255, 1.0);
+                    hamburger-menu.colorize: rgba(255, 255, 255, 1.0);
+                    hamburger-menu.x: 36px;
+                    hamburger-menu.y: 24px;
+                    hamburger-menu.width: 64px;
+                    hamburger-menu.height: 64px;
+                    in {
+                        animate smudgy-logo-text.font-size, smudgy-logo-text.font-weight, smudgy-logo-text.color, hamburger-menu.colorize, hamburger-menu.x, hamburger-menu.y, hamburger-menu.width, hamburger-menu.height {
+                            duration: 250ms;
+                            easing: ease-in;
+                        }
+                    }
+                    out {
+                        animate smudgy-logo-text.font-size, smudgy-logo-text.font-weight, smudgy-logo-text.color, hamburger-menu.colorize, hamburger-menu.x, hamburger-menu.y, hamburger-menu.width, hamburger-menu.height {
+                            duration: 500ms;
+                            easing: ease-out;
+                        }
+                    }
+                }
+                has-hover-small when touch-area.has-hover && !should-appear(): {
+                    smudgy-logo-text.color: rgba(255, 255, 255, 0.6);
+                    hamburger-menu.colorize: rgba(255, 255, 255, 0.6);
+                    in {
+                        animate smudgy-logo-text.color, hamburger-menu.colorize {
+                            duration: 100ms;
+                            easing: ease-in;
+                        }
+                    }
+                    out {
+                        animate smudgy-logo-text.color, hamburger-menu.colorize {
+                            duration: 100ms;
+                            easing: ease-out;
+                        }
+                    }
+                }
+            ]
+            touch-area := TouchArea {
+                mouse-cursor: pointer;
+
+                clicked => {
+                    open = !open;
+                }
+
+                hamburger-menu := Image {
+                    source: HeroIconsOutline.bars-3;
+                    colorize: rgba(255, 255, 255, 0.2);
+                    x: 1rem;
+                    y: 1rem;
+                    width: 16px;
+                    height: 16px;
+                    preferred-height: 0;
+                    preferred-width: 0;
+                }
+
+                smudgy-logo-text := ThemedText {
+                    x: hamburger-menu.x + hamburger-menu.width + self.font-size * 0.25;
+                    y: hamburger-menu.y;
+                    font-size: 14px;
+                    text: "smudgy";
+                    color: rgba(255, 255, 255, 0.2);
+                    font-weight: 400;
+                }
+            }
+        }
+    }
+
+    border-rect := Rectangle {
+        vertical-stretch: 0;
+        opacity: 0;
+        height: 1pt;
+        background: Palette.toolbar-border;
+    }
+
+    cover-rect := Rectangle {
+        vertical-stretch: 1;
+        opacity: 0;
+        background: Palette.toolbar-cover;
+    }
+}

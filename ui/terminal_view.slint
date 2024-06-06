@@ -1,0 +1,105 @@
+import { ScrollView } from "std-widgets.slint";
+import { Palette, AutocompleteResult, SessionKeyPressResponse, SessionKeyPressResponseType, SessionState } from "globals.slint";
+import { ScrollBar } from "components/scrollbar.slint";
+
+export component TerminalView inherits VerticalLayout {
+    spacing: 1rem;
+    in property <SessionState> session;
+    in property <int> total_lines: 2000;
+    callback accepted(string);
+    callback key-pressed(KeyEvent, string) -> SessionKeyPressResponse;
+    callback request-autocomplete(string, bool) -> AutocompleteResult;
+
+    terminal-area := Flickable {
+        vertical-stretch: 1;
+        forward-focus: input;
+        TouchArea {
+            clicked => {
+                input.focus();
+            }
+            HorizontalLayout {
+                alignment: stretch;
+                lines := VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: end;
+                    for image in root.session.buffer: Image {
+                        vertical-stretch: 0;
+                        source: image;
+                        width: image.width * 1phx;
+                        height: image.height * 1phx;
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                ScrollBar {
+                    enabled: true;
+                    horizontal: false;
+                    maximum: session.scrollback-size[0];
+                    page-size: session.buffer.length;
+                    initial-value: session.scrollback-size[0];
+                    width: self.has-hover ? 20px : 14px;
+                    height: root.height - input-area.height - root.spacing;
+                }
+            }
+        }
+    }
+
+    input-area := Rectangle {
+        vertical-stretch: 0;
+        background: Palette.background.darker(50%);
+        VerticalLayout {
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+            FocusScope {
+                property <bool> last-keyed-action-was-autocomplete: false;
+                property <AutocompleteResult> last-autocomplete-result;
+                property <SessionKeyPressResponse> last-session-key-press-response;
+                forward-focus: input;
+                key-pressed(ev) => {
+                    if (ev.text == Key.Tab) {
+                        if (input.text == "" || ev.modifiers.alt || ev.modifiers.control || ev.modifiers.meta || ev.modifiers.shift) {
+                            return reject;
+                        }
+                        last-autocomplete-result = request-autocomplete(input.text, !!last-keyed-action-was-autocomplete);
+                        if (last-autocomplete-result.success) {
+                            input.text = last-autocomplete-result.new-line;
+                            input.set-selection-offsets(last-autocomplete-result.autocompleted-end, last-autocomplete-result.autocompleted-end);
+                            last-keyed-action-was-autocomplete = true;
+                        }
+                    }
+                    accept
+                }
+                input := TextInput {
+                    vertical-alignment: center;
+                    accepted => {
+                        accepted(self.text);
+                        self.select-all();
+                    }
+                    edited => {
+                        last-keyed-action-was-autocomplete = false
+                    }
+                    key-pressed(ev) => {
+
+                        // Let native code get a first poke at it
+                        last-session-key-press-response = key-pressed(ev, input.text);
+                        if (last-session-key-press-response.response == SessionKeyPressResponseType.reject) {
+                            return reject;
+                        } else if (last-session-key-press-response.response == SessionKeyPressResponseType.reject) {
+                            return accept;
+                        } else if (last-session-key-press-response.response == SessionKeyPressResponseType.replace-input) {
+                            input.text = last-session-key-press-response.str-args[0];
+                            input.select-all();
+                        }
+                        accept
+                    }
+                    font-family: "Geist Mono";
+                    font-size: 14px;
+                    height: self.font-size * 5 / 4;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,95 @@
+
+import { ScrollView, Button } from "std-widgets.slint";
+
+import "../assets/fonts/GeistVF.ttf";
+import "../assets/fonts/GeistMonoVF.ttf";
+import "../assets/fonts/MonaspaceKryptonVarVF.ttf";
+
+import { Toolbar } from "toolbar.slint";
+import { AutocompleteResult, SessionKeyPressResponse, SessionKeyPressResponseType, SessionState, TerminalSizeHints, SmudgyState, Palette } from "globals.slint";
+import { TerminalView } from "terminal_view.slint";
+
+export { SessionKeyPressResponse, SessionKeyPressResponseType, SessionState, SmudgyState, TerminalSizeHints }
+
+
+export component MainWindow inherits Window {    
+    icon: @image-url("../assets/icon256.png");
+    preferred-width: 800px;
+    preferred-height: 600px;
+    title: "smudgy";
+    in property <[SessionState]> sessions;
+    in property <bool> is-full-screen;
+    
+    callback toolbar-create-session-clicked <=> toolbar.create-session-clicked;
+    callback toolbar-fullscreen-clicked <=> toolbar.fullscreen-clicked;
+    callback drag-window <=> toolbar.drag-window;
+    callback request-autocomplete(int, string, bool) -> AutocompleteResult;
+    callback refresh-terminal(int);
+    callback session-accepted(int, string);
+    callback session-key-pressed(int, KeyEvent, string) -> SessionKeyPressResponse;
+    property <length> editor-font-size: 14px;
+
+    public pure function get_physical_terminal_area_dimensions() -> TerminalSizeHints {
+        // Height has subtracted:
+        // 1 rem for padding inside editor
+        // 1 rem for spacing in between editor and terminal area
+        // font-size * 1.25 for the editor itself 
+        return { 
+            terminal-padding: 1rem,
+            terminal-spacing: 1rem,
+            editor-area-height: (editor-font-size * 1.25) + 1rem,
+            terminal-scrollbar-width: 20px,
+         };
+    }
+
+    Rectangle {
+        background: Palette.background;
+        VerticalLayout {
+            padding-top: 1rem;
+            padding-left: 1rem;
+            padding-bottom: 1rem;
+            alignment: stretch;
+            terminal-area := HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 1rem;
+                if sessions.length == 0: Rectangle {
+                    horizontal-stretch: 1;
+                }
+                for session[index] in sessions: TerminalView {
+                    horizontal-stretch: 1;
+                    session: session;
+                    max-width: (parent.width / sessions.length) - 1rem;
+                    request-autocomplete(current-line, last-keyed-action-was-autocomplete) => {
+                        request-autocomplete(index, current-line, last-keyed-action-was-autocomplete);
+                    }
+                    accepted(line) => {
+                        session-accepted(index, line);
+                    }
+                    key-pressed(ev, string) => {
+                        return session-key-pressed(index, ev, string);
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 0;
+                }
+            }
+        }
+
+        toolbar := Toolbar {
+            num-sessions: sessions.length;
+            is-full-screen: is-full-screen;
+        }    
+    }
+
+    // Reconnect and Close Session floating buttons
+    // for session[index] in sessions: Rectangle {
+    //     width: 216px;
+    //     height: 64px;
+    //     x: (index * (root.width / (sessions.length))) + (root.width / (2 * sessions.length)) - self.width / 2;
+    //     y: 192px;
+    //     background: Palette.button-secondary-bg;
+    //     border-radius: self.height * 0.5;
+    //     border-width: 0.5pt;
+    //     border-color: Palette.button-secondary-color;
+    // }
+}

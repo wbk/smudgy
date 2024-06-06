@@ -1,0 +1,6 @@
+[submodule "vendor/slint"]
+	path = vendor/slint
+	url = git@github.com:wbk/slint
+[submodule "assets/heroicons"]
+	path = assets/heroicons
+	url = https://github.com/tailwindlabs/heroicons.git
