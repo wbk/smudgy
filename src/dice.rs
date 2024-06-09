@@ -1,4 +1,5 @@
 use rand::{distributions::Uniform, prelude::*};
+use std::cmp;
 
 /// Returns the sum of a series of dice rolls
 ///
@@ -35,7 +36,7 @@ pub fn dice_roll(num_dice: usize, num_sides: u32) -> u32 {
 ///
 /// * `num_dice` - The number of dice to be rolled
 /// * `num_sides` - The number of sides each dice has
-/// * `modifier` - The number of sides each dice has
+/// * `modifier` - A constant added to the result
 ///
 /// ### Example
 ///
@@ -47,7 +48,7 @@ pub fn dice_roll(num_dice: usize, num_sides: u32) -> u32 {
 /// ```
 pub fn dice_roll_mod(num_dice: usize, num_sides: u32, modifier: i32) -> u32 {
     let roll = dice_roll(num_dice, num_sides) as i32;
-    let result = roll + modifier;
+    let result = roll + cmp::max(modifier, 0);
     result as u32
 }
 

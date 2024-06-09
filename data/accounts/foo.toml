@@ -1,0 +1,3 @@
+login = "foo"
+password_hash = "$argon2id$v=19$m=4096,t=192,p=8$efrMNRhQ8PdvfOb+o4JuW4hFPtfH08SKasnjjbJdlyM$rtTOpayvRN2YAT0PsbOju6NobV1UCFhrazNjAYmlJBc"
+email = "wkalata@gmail.com"
