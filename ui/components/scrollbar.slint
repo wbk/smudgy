@@ -23,9 +23,11 @@ export component ScrollBar inherits Rectangle {
 
     states [
         hover when i-touch-area.has-hover : {
-            background: Palette.button-secondary-bg.with-alpha(0.2);
-            i-border.background: Palette.button-secondary-bg.with-alpha(0.2);
-            i-thumb.opacity: 0.6;
+            background:  Palette.background.mix(white, 0.95);
+            i-border.background: black;
+            i-thumb.background: Palette.background.mix(white, 0.80);
+            i-thumb.border-color: rgb(170 ,170 ,170 );
+            i-thumb.opacity: 1;
             pad: 4px;
         }
     ]
@@ -46,12 +48,12 @@ export component ScrollBar inherits Rectangle {
         x: !root.horizontal ? (parent.width - self.width) / 2 : root.offset + (root.track-size - i-thumb.width) * (value() / root.maximum);
         y: root.horizontal ? (parent.height - self.height) / 2 : root.offset + (root.track-size - i-thumb.height) * (value() / root.maximum);
         border-radius: (root.horizontal ? self.height : self.width) / 2;
-        background: Palette.button-secondary-bg;
+        background: Palette.background.mix(white, 0.70);
         opacity: 0.2;
         border-width: 0.8px;
-        border-color: Palette.button-secondary-color;
+        border-color: Palette.background.mix(white, 0.90);
 
-        animate width, height, opacity { duration: 50ms; easing: ease-in; }
+        animate width, height, opacity, border-color, background { duration: 50ms; easing: ease-in; }
     }
 
     i-touch-area := TouchArea {

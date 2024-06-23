@@ -1,0 +1,42 @@
+
+import { ScrollView, Button } from "std-widgets.slint";
+
+import "../../assets/fonts/GeistVF.ttf";
+import "../../assets/fonts/GeistMonoVF.ttf";
+import "../../assets/fonts/MonaspaceKryptonVarVF.ttf";
+
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
+
+import { CheckBox, StandardListView, StyleMetrics } from "std-widgets.slint";
+import { ProfilePage } from "./profile_page.slint";
+import { CreateProfilePage } from "./create_profile_page.slint";
+import { SideBar } from "./side_bar.slint";
+
+export struct ConnectEvent {
+    profile_name: string,
+    character_name: string,
+    host: string,
+    port: int
+}
+export component ConnectWindow inherits Window {
+    always-on-top: true;
+    preferred-width: 700px;
+    preferred-height: 500px;
+    title: "Connect to...";
+    icon: @image-url("../../assets/icon256.png");
+    callback connect-clicked(ConnectEvent);
+
+    HorizontalLayout {
+        side-bar := SideBar {
+            title: @tr("Slint Widgets Gallery");
+            model: ["ArcticMUD"];
+        }
+
+        CreateProfilePage {
+            
+        }
+
+
+    }
+}

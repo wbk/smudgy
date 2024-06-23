@@ -18,6 +18,8 @@ slint =  { path = "./vendor/slint/api/rs/slint", default-features = false, featu
 tiny-skia = "0.11.4"
 tokio = { version = "1.38.0", features = ["full"] }
 vtparse = "0.6.2"
+smudgy_connect_window = {path = "./ui_src/connect_window"}
+dirs = "5.0.1"
 
 [build-dependencies]
 slint-build = { path = "./vendor/slint/api/rs/build" }
@@ -29,5 +31,3 @@ debug = true
 
 [lints.clippy]
 pedantic = "warn"
-
-

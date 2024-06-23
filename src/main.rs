@@ -7,14 +7,20 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use i_slint_backend_winit::{winit::{dpi::{PhysicalPosition, PhysicalSize}, window::{Fullscreen, Icon}}, WinitWindowAccessor};
+use i_slint_backend_winit::{
+    winit::{
+        dpi::{PhysicalPosition, PhysicalSize},
+        window::{Fullscreen, Icon},
+    },
+    WinitWindowAccessor,
+};
 
 #[cfg(target_os = "windows")]
 use i_slint_backend_winit::winit::platform::windows::WindowExtWindows;
 
 use i_slint_core::lengths::LogicalRect;
 use session::{Profile, Session};
-use slint::{VecModel};
+use slint::VecModel;
 use tokio::runtime::Builder;
 
 slint::include_modules!();
@@ -23,42 +29,34 @@ pub static TOKIO: std::sync::LazyLock<tokio::runtime::Runtime> =
     std::sync::LazyLock::new(|| Builder::new_multi_thread().enable_all().build().unwrap());
 
 mod hotkey;
+pub mod models;
 mod script_runtime;
 pub mod session;
 mod trigger;
 
-#[cfg(target_os = "windows")]
-fn set_taskbar_icon(window: &i_slint_backend_winit::winit::window::Window, icon: Option<Icon>) {
-    window.set_taskbar_icon(icon);
-}
 
-#[cfg(not(target_os = "windows"))]
-fn set_taskbar_icon(_window: &i_slint_backend_winit::winit::window::Window, _icon: Option<Icon>) {}
+use smudgy_connect_window::ConnectWindow;
 
 fn main() {
     deno_core::JsRuntime::init_platform(None);
     LazyLock::force(&TOKIO);
 
-    slint::platform::set_platform(Box::new(
+    let platform = Box::new(
         i_slint_backend_winit::Backend::new_with_renderer_by_name(Some("skia-opengl")).unwrap(),
-    ))
-    .unwrap();
+    );
 
-    let ui = MainWindow::new().unwrap();
+
+    slint::platform::set_platform(platform).unwrap();
+
+    let ui: MainWindow = MainWindow::new().unwrap();
+
+    let connect_window: ConnectWindow = ConnectWindow::new().unwrap();
+
     let sessions: Rc<RefCell<Vec<Arc<Mutex<Session>>>>> = Rc::new(RefCell::new(Vec::new()));
     let sessions_model = Rc::new(VecModel::default());
 
     ui.set_sessions(sessions_model.clone().into());
 
-    // ui.window().with_winit_window(|window| {
-    //     let pixmap =
-    //         tiny_skia::Pixmap::decode_png(include_bytes!("../assets/icon256.png")).unwrap();
-    //     let icon = Icon::from_rgba(pixmap.data().into(), 256, 256).unwrap();
-
-    //     set_taskbar_icon(&window, Some(icon.clone()));
-
-    //     window.set_window_icon(Some(icon));
-    // });
     let weak_window = ui.as_weak();
     ui.on_toolbar_fullscreen_clicked(move || {
         let ui = weak_window.upgrade().unwrap();
@@ -74,44 +72,51 @@ fn main() {
         });
     });
 
-
     let weak_window = ui.as_weak();
     ui.on_drag_window(move || {
-        weak_window.upgrade().unwrap().window().with_winit_window(|window| {
-            window.drag_window().unwrap();
-        });
+        weak_window
+            .upgrade()
+            .unwrap()
+            .window()
+            .with_winit_window(|window| {
+                window.drag_window().unwrap();
+            });
     });
 
     let ui_sessions = sessions.clone();
     let ui_sessions_model = sessions_model.clone();
     let weak_window = ui.as_weak();
+    let ui_connect = connect_window.as_weak();
     ui.on_toolbar_create_session_clicked(move || {
-        let mut sessions = ui_sessions.borrow_mut();
+        let connect = ui_connect.upgrade().unwrap();
+        connect.show();
 
-        let new_session_id = sessions.len() as i32;
+        // let mut sessions = ui_sessions.borrow_mut();
+        // let new_session_id = sessions.len() as i32;
 
-        let session = Arc::new(Mutex::new(Session::new(
-            new_session_id,
-            weak_window.clone(),
-            Profile {
-                host: "mud.arctic.org".to_string(),
-                port: 2700,
-                name: "Arctic".to_string(),
-            },
-        )));
+        // let session = Arc::new(Mutex::new(Session::new(
+        //     new_session_id,
+        //     weak_window.clone(),
+        //     Profile {
+        //         host: "mud.arctic.org".to_string(),
+        //         port: 2700,
+        //         name: "Arctic".to_string(),
+        //     },
+        // )));
 
-        sessions.push(session.clone());
+        // sessions.push(session.clone());
 
-        let mut session_guard = session.lock().unwrap();
+        // let mut session_guard = session.lock().unwrap();
 
-        let ui_session_state = SessionState {
-            name: "Arctic".into(),
-            buffer: session_guard.view().into(),
-            scrollback_size: session_guard.view().row_count_model().into()
-        };
-        ui_sessions_model.push(ui_session_state);
+        // let ui_session_state = SessionState {
+        //     name: "Arctic".into(),
+        //     buffer: session_guard.view().into(),
+        //     scrollback_size: session_guard.view().row_count_model().into(),
+        // };
+        // ui_sessions_model.push(ui_session_state);
 
-        session_guard.connect();
+        // session_guard.connect();
+
     });
 
     let ui_sessions = sessions.clone();
@@ -155,18 +160,26 @@ fn main() {
                 if !sessions.is_empty() {
                     let size_hints = window.invoke_get_physical_terminal_area_dimensions();
                     let ui = weak_window.upgrade().unwrap();
-                    
+
                     window.window().with_winit_window(|window| {
                         let window_size = window.inner_size();
-                        
-                        let terminal_height = window_size.height - (size_hints.terminal_padding * 2.0 + size_hints.terminal_spacing + size_hints.editor_area_height) as u32;
-                        let terminal_width = window_size.width - (size_hints.terminal_padding * 2.0 + size_hints.terminal_spacing * (sessions.len() as f32) - size_hints.terminal_spacing) as u32 - size_hints.terminal_scrollbar_width as u32;
+
+                        let terminal_height = window_size.height
+                            - (size_hints.terminal_padding * 2.0
+                                + size_hints.terminal_spacing
+                                + size_hints.editor_area_height)
+                                as u32;
+                        let terminal_width = window_size.width
+                            - (size_hints.terminal_padding * 2.0
+                                + size_hints.terminal_spacing * (sessions.len() as f32)
+                                - size_hints.terminal_spacing) as u32
+                            - size_hints.terminal_scrollbar_width as u32;
 
                         for session in sessions.iter() {
                             let session_guard = session.lock().unwrap();
                             session_guard.prepare_render(terminal_width, terminal_height);
                         }
-                    });            
+                    });
                 }
             }
             slint::RenderingState::AfterRendering => {}

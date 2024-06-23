@@ -1,10 +1,9 @@
 use winresource::WindowsResource;
 
 fn main() {
-    let config = slint_build::CompilerConfiguration::new().with_style("cupertino".to_string());
 
-    slint_build::compile_with_config("ui/main_window.slint", config)
-    .unwrap();
+   let config = slint_build::CompilerConfiguration::new().with_style("cupertino-dark".to_string());
+    slint_build::compile_with_config("ui/main_window.slint", config).unwrap();
 
     if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
         WindowsResource::new()

@@ -1,0 +1,23 @@
+[package]
+name = "smudgy_connect_window"
+private = true
+version = "0.1.0"
+authors = ["walt"]
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0.86"
+slint =  { path = "../../vendor/slint/api/rs/slint", default-features = false, features = ["compat-1-2", "std", "gettext", "accessibility", "backend-winit", "renderer-skia-opengl" ]  }
+
+[build-dependencies]
+slint-build = { path = "../../vendor/slint/api/rs/build" }
+winresource = "0.1.17"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[lints.clippy]
+pedantic = "warn"
+

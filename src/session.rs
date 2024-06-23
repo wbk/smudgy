@@ -19,15 +19,14 @@ use slint::VecModel;
 use terminal_view::TerminalView;
 
 use crate::{AutocompleteResult, MainWindow};
-use incoming_line_history::IncomingLineHistory;
 
 mod command_history;
-
 mod connection;
-
 pub mod incoming_line_history;
 mod styled_line;
 mod terminal_view;
+
+use incoming_line_history::IncomingLineHistory;
 pub use styled_line::StyledLine;
 pub use terminal_view::ViewAction;
 

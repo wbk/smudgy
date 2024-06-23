@@ -90,7 +90,7 @@ export component Toolbar inherits VerticalLayout {
         height: smudgy-logo.height + 1rem;
         if !should-suppress(): toolbar-touch := TouchArea {
             pointer-event(event) => {
-                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down && !is-full-screen) {
                     drag-window();
                 }
             }
@@ -155,7 +155,6 @@ export component Toolbar inherits VerticalLayout {
                                         label: "connect";
                                         primary: true;
                                         clicked => {
-                                            open = false;
                                             create-session-clicked()
                                         }
                                     }
