@@ -9,11 +9,14 @@ export component TerminalView inherits VerticalLayout {
     callback accepted(string);
     callback key-pressed(KeyEvent, string) -> SessionKeyPressResponse;
     callback request-autocomplete(string, bool) -> AutocompleteResult;
+    callback scrollbar-value-changed <=> scrollbar.value-changed;
 
     terminal-area := Flickable {
         vertical-stretch: 1;
-        forward-focus: input;
         TouchArea {
+            scroll-event(ev) => {
+                return scrollbar.forwarded-scroll-event(ev);
+            }
             clicked => {
                 input.focus();
             }
@@ -34,7 +37,7 @@ export component TerminalView inherits VerticalLayout {
                     vertical-stretch: 1;
                 }
 
-                ScrollBar {
+                scrollbar := ScrollBar {
                     enabled: true;
                     horizontal: false;
                     maximum: session.scrollback-size[0];

@@ -4,21 +4,37 @@ export component ScrollBar inherits Rectangle {
     in property <bool> enabled;
     out property <bool> has-hover: i-touch-area.has-hover;
     in-out property <bool> horizontal;
-    in-out property <int> maximum;
-    in property <int> initial-value;
-    in-out property <int> page-size;
+    in-out property <float> maximum;
+    in property <float> initial-value;
+    in-out property <float> page-size;
+    callback value-changed(int);
 
     private property <length> track-size: root.horizontal ? root.width - 2 * root.offset : root.height - 2 * offset;
     private property <length> step-size: 10px;
     private property <length> offset: 2px;
     private property <length> pad: 2px;
-    private property <int> last-value;
+    private property <float> last-value;
     private property <bool> is-scrolled-to-end: initial-value == maximum;
 
     background: transparent;
 
     pure public function value() -> int {
         !i-touch-area.active && is-scrolled-to-end ? maximum : last-value
+    }
+
+    public function forwarded-scroll-event(event: PointerScrollEvent) -> EventResult {
+        if (root.horizontal && event.delta-x != 0) {
+            last-value = min(root.maximum, max(0,  value() - (event.delta-x * page-size) / root.height + event.delta-x / abs(event.delta-x)));
+            is-scrolled-to-end = last-value == maximum;
+            value-changed(is-scrolled-to-end ? -1 : last-value);
+            return accept;
+        } else if (!root.horizontal && event.delta-y != 0) {
+            last-value = min(root.maximum, max(0, value() - (event.delta-y * page-size) / root.height + event.delta-y / abs(event.delta-y)));
+            is-scrolled-to-end = last-value == maximum;
+            value-changed(is-scrolled-to-end ? -1 : last-value);
+            return accept;
+        }
+        reject
     }
 
     states [
@@ -69,7 +85,7 @@ export component ScrollBar inherits Rectangle {
                 self.pressed-value = value();
                 active = true;
             } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                value(); // this shouldn't be necessary but is
+                value(); // this shouldn't be necessary but is?
                 active = false;
             }
         }
@@ -81,20 +97,10 @@ export component ScrollBar inherits Rectangle {
                                : (i-touch-area.mouse-y - i-touch-area.pressed-y) * (root.maximum / (root.track-size - i-thumb.height))
                 )));
                 is-scrolled-to-end = last-value == maximum;
+                value-changed(is-scrolled-to-end ? -1 : last-value);
             }
         }
 
-        // scroll-event(event) => {
-        //     if (root.horizontal && event.delta-x != 0) {
-        //         last-value = min(root.maximum, max(0, value() - (event.delta-x)/1px));
-        //         is-scrolled-to-end = last-value == maximum;
-        //         return accept;
-        //     } else if (!root.horizontal && event.delta-y != 0) {
-        //         last-value = min(root.maximum, max(0, value() - (event.delta-y)/1px));
-        //         is-scrolled-to-end = last-value == maximum;
-        //         return accept;
-        //     }
-        //     reject
-        // }
+
     }
 }

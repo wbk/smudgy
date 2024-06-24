@@ -27,6 +27,7 @@ export component MainWindow inherits Window {
     callback refresh-terminal(int);
     callback session-accepted(int, string);
     callback session-key-pressed(int, KeyEvent, string) -> SessionKeyPressResponse;
+    callback session-scrollbar-value-changed(int, int);
     property <length> editor-font-size: 14px;
 
     public pure function get_physical_terminal_area_dimensions() -> TerminalSizeHints {
@@ -67,6 +68,9 @@ export component MainWindow inherits Window {
                     }
                     key-pressed(ev, string) => {
                         return session-key-pressed(index, ev, string);
+                    }
+                    scrollbar-value-changed(value) => {
+                        session-scrollbar-value-changed(index, value);
                     }
                 }
                 Rectangle {

@@ -2,6 +2,9 @@ use std::{fs, path::{Path, PathBuf}, sync::LazyLock};
 
 use anyhow::Context;
 
+mod profile;
+pub use profile::Profile;
+
 static SMUDGY_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     let mut dir = dirs::document_dir().unwrap();
     dir.push("smudgy");

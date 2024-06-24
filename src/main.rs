@@ -1,6 +1,9 @@
 #![feature(exact_size_is_empty)]
 #![feature(duration_millis_float)]
 
+use log::{debug, error, info, log_enabled, Level};
+use models::Profile;
+
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -15,13 +18,13 @@ use i_slint_backend_winit::{
     WinitWindowAccessor,
 };
 
-#[cfg(target_os = "windows")]
-use i_slint_backend_winit::winit::platform::windows::WindowExtWindows;
-
 use i_slint_core::lengths::LogicalRect;
-use session::{Profile, Session};
+use session::Session;
 use slint::VecModel;
 use tokio::runtime::Builder;
+
+#[macro_use]
+extern crate log;
 
 slint::include_modules!();
 
@@ -34,22 +37,37 @@ mod script_runtime;
 pub mod session;
 mod trigger;
 
-
 use smudgy_connect_window::ConnectWindow;
 
 fn main() {
+    if let Err(_) = std::env::var("SMUDGY_LOG") {
+        std::env::set_var("SMUDGY_LOG", "trace");
+    }
+
+    pretty_env_logger::init_custom_env("SMUDGY_LOG");
+
+    info!(
+        "smudgy started; version {} ({}, built on {})", env!("SMUDGY_BUILD_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        
+        build_time::build_time_local!("%Y-%m-%d %H:%M:%S")
+    );
+
     deno_core::JsRuntime::init_platform(None);
+    trace!("deno initialized, v8 version {}", deno_core::v8_version());
+
     LazyLock::force(&TOKIO);
+    trace!(
+        "tokio runtime started, {} task workers running",
+        TOKIO.metrics().num_workers()
+    );
 
     let platform = Box::new(
         i_slint_backend_winit::Backend::new_with_renderer_by_name(Some("skia-opengl")).unwrap(),
     );
-
-
     slint::platform::set_platform(platform).unwrap();
 
     let ui: MainWindow = MainWindow::new().unwrap();
-
     let connect_window: ConnectWindow = ConnectWindow::new().unwrap();
 
     let sessions: Rc<RefCell<Vec<Arc<Mutex<Session>>>>> = Rc::new(RefCell::new(Vec::new()));
@@ -91,32 +109,27 @@ fn main() {
         let connect = ui_connect.upgrade().unwrap();
         connect.show();
 
-        // let mut sessions = ui_sessions.borrow_mut();
-        // let new_session_id = sessions.len() as i32;
+        let mut sessions = ui_sessions.borrow_mut();
+        let new_session_id = sessions.len() as i32;
 
-        // let session = Arc::new(Mutex::new(Session::new(
-        //     new_session_id,
-        //     weak_window.clone(),
-        //     Profile {
-        //         host: "mud.arctic.org".to_string(),
-        //         port: 2700,
-        //         name: "Arctic".to_string(),
-        //     },
-        // )));
+        let session = Arc::new(Mutex::new(Session::new(
+            new_session_id,
+            weak_window.clone(),
+            Profile::new(Some("Arctic")).set_host("mud.arctic.org").set_port(2700).clone()
+        )));
 
-        // sessions.push(session.clone());
+        sessions.push(session.clone());
 
-        // let mut session_guard = session.lock().unwrap();
+        let mut session_guard = session.lock().unwrap();
 
-        // let ui_session_state = SessionState {
-        //     name: "Arctic".into(),
-        //     buffer: session_guard.view().into(),
-        //     scrollback_size: session_guard.view().row_count_model().into(),
-        // };
-        // ui_sessions_model.push(ui_session_state);
+        let ui_session_state = SessionState {
+            name: "Arctic".into(),
+            buffer: session_guard.view().into(),
+            scrollback_size: session_guard.view().row_count_model().into(),
+        };
+        ui_sessions_model.push(ui_session_state);
 
-        // session_guard.connect();
-
+        session_guard.connect();
     });
 
     let ui_sessions = sessions.clone();
@@ -145,6 +158,16 @@ fn main() {
             let to_invoke = sessions[session_index as usize].clone();
             let mut guard = to_invoke.lock().unwrap();
             guard.on_key_pressed(ev, input_line.as_str())
+        },
+    );
+
+    let ui_sessions = Rc::clone(&sessions);
+    ui.on_session_scrollbar_value_changed(
+        move |session_index, value| {
+            let sessions = ui_sessions.borrow_mut();
+            let to_invoke = sessions[session_index as usize].clone();
+            let mut guard = to_invoke.lock().unwrap();
+            guard.view().set_scroll_position(value);
         },
     );
 
@@ -196,6 +219,7 @@ fn main() {
     });
 
     ui.show().unwrap();
+    trace!("Starting ui event loop...");
     slint::run_event_loop().unwrap();
     ui.hide().unwrap();
 }

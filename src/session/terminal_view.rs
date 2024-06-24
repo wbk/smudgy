@@ -3,7 +3,8 @@ use std::{
     cell::{Ref, RefCell},
     cmp::max,
     collections::VecDeque,
-    num::NonZeroUsize, num::NonZeroU32,
+    num::NonZeroU32,
+    num::NonZeroUsize,
     rc::Rc,
     sync::Arc,
 };
@@ -62,6 +63,11 @@ static ANSI_COLOR_TABLE: [slint::Color; 16] = [
     ANSI_CYAN_BOLD,
     ANSI_WHITE_BOLD,
 ];
+
+enum ScrollPosition {
+    PinnedToEnd,
+    ToLine(i32),
+}
 
 impl From<styled_line::Color> for slint::Color {
     fn from(value: styled_line::Color) -> Self {
@@ -267,8 +273,6 @@ pub enum ViewAction {
     AppendPartialLine(Arc<StyledLine>),
 }
 
-
-
 pub struct TerminalView {
     font: fontdue::Font,
     row_pixel_buffer_cache: ImageCache,
@@ -282,6 +286,7 @@ pub struct TerminalView {
     font_size: f32,
     last_line_terminated: RefCell<bool>,
     row_count_model: Rc<SharedSingleIntModel>,
+    scroll_position: RefCell<ScrollPosition>,
 }
 
 impl TerminalView {
@@ -314,12 +319,25 @@ impl TerminalView {
             tx,
             rx: RefCell::new(rx),
             last_line_terminated: RefCell::new(true),
-            row_count_model: Rc::new(SharedSingleIntModel::new(0))
+            row_count_model: Rc::new(SharedSingleIntModel::new(0)),
+            scroll_position: RefCell::new(ScrollPosition::PinnedToEnd),
         }
     }
 
     pub fn row_count_model(&self) -> Rc<SharedSingleIntModel> {
         self.row_count_model.clone()
+    }
+
+    pub fn set_scroll_position(&self, value: i32) {
+        let mut scroll_position = self.scroll_position.borrow_mut();
+
+        *scroll_position = if value == -1 {
+            ScrollPosition::PinnedToEnd
+        } else {
+            ScrollPosition::ToLine(value)
+        };
+
+        self.notify.reset();
     }
 
     pub fn handle_incoming_lines(&self) {
@@ -406,7 +424,21 @@ impl slint::Model for TerminalView {
     fn row_data(&self, row: usize) -> Option<Self::Data> {
         let viewable_size = self.viewable_size.borrow();
         let mut lines = self.lines.borrow_mut();
-        let offset = lines.len() - self.row_count();
+        let scroll_position = self.scroll_position.borrow();
+
+        let mut offset = lines.len() - self.row_count();
+
+        if let ScrollPosition::ToLine(scroll_line) = *scroll_position {
+            if row + offset + 15 < lines.len() {
+                offset = max(
+                    0,
+                    (scroll_line as usize)
+                        .checked_sub(self.row_count() + 15)
+                        .or(Some(0))
+                        .unwrap(),
+                );
+            }
+        }
 
         match lines.get_mut(row + offset) {
             Some(line) => {
@@ -428,7 +460,7 @@ impl slint::Model for TerminalView {
 
 pub struct SharedSingleIntModel {
     value: RefCell<i32>,
-    notify: ModelNotify
+    notify: ModelNotify,
 }
 
 impl SharedSingleIntModel {

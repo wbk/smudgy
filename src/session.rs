@@ -6,10 +6,7 @@ use std::{
 };
 
 use crate::{
-    hotkey::{HotkeyManager, HotkeyResult},
-    script_runtime::ScriptRuntime,
-    trigger::TriggerManager,
-    SessionKeyPressResponse, SessionKeyPressResponseType,
+    hotkey::{HotkeyManager, HotkeyResult}, models::Profile, script_runtime::ScriptRuntime, trigger::TriggerManager, SessionKeyPressResponse, SessionKeyPressResponseType
 };
 
 use command_history::CommandHistory;
@@ -33,13 +30,6 @@ pub use terminal_view::ViewAction;
 // Regex which matches on word boundaries
 static BOUNDARY_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"\b").unwrap());
-
-#[derive(Debug, Clone)]
-pub struct Profile {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-}
 
 #[derive(Debug, Default)]
 struct AutocompleteState {
@@ -244,6 +234,6 @@ impl Session {
 
     pub fn connect(&mut self) {
         self.connection
-            .connect(&self.profile.host, self.profile.port);
+            .connect(&self.profile.host(), self.profile.port());
     }
 }
