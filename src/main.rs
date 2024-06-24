@@ -7,7 +7,7 @@ use models::Profile;
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex, Weak},
 };
 
 use i_slint_backend_winit::{
@@ -20,7 +20,7 @@ use i_slint_backend_winit::{
 
 use i_slint_core::lengths::LogicalRect;
 use session::Session;
-use slint::VecModel;
+use slint::{platform::WindowEvent, ComponentHandle, VecModel};
 use tokio::runtime::Builder;
 
 #[macro_use]
@@ -39,9 +39,32 @@ mod trigger;
 
 use smudgy_connect_window::ConnectWindow;
 
+
+fn center_window_in_parent(parent: &MainWindow, child: &ConnectWindow)
+{
+    parent.window().with_winit_window(|parent_winit| {
+        child.window().with_winit_window(|child_winit| {
+            let parent_size = parent_winit.inner_size();
+            let parent_position = parent_winit.outer_position().unwrap();
+            let child_size = child_winit.inner_size();
+
+            let new_position = PhysicalPosition::new(
+                parent_position.x + (parent_size.width as i32 - child_size.width as i32) / 2,
+                parent_position.y + (parent_size.height as i32 - child_size.height as i32) / 2,
+            );
+
+            debug!("Centering child window in parent: parent size: {:?}, parent position: {:?}, child size: {:?}, new position: {:?}", parent_size, parent_position, child_size, new_position);
+
+            child_winit.set_outer_position(new_position);
+
+            let _ = child_winit.request_inner_size(child_size);
+        });
+    });
+}
+
 fn main() {
     if let Err(_) = std::env::var("SMUDGY_LOG") {
-        std::env::set_var("SMUDGY_LOG", "trace");
+        std::env::set_var("SMUDGY_LOG", "debug,smudgy=trace");
     }
 
     pretty_env_logger::init_custom_env("SMUDGY_LOG");
@@ -107,7 +130,14 @@ fn main() {
     let ui_connect = connect_window.as_weak();
     ui.on_toolbar_create_session_clicked(move || {
         let connect = ui_connect.upgrade().unwrap();
-        connect.show();
+        let window = weak_window.upgrade().unwrap();
+
+        connect.show().unwrap();
+        debug!("Connect window has size {:?}", connect.window().size());
+        connect.window().dispatch_event(WindowEvent::Resized { size: connect.window().size().to_logical(connect.window().scale_factor()) });
+
+        center_window_in_parent(&window, &connect);
+
 
         let mut sessions = ui_sessions.borrow_mut();
         let new_session_id = sessions.len() as i32;

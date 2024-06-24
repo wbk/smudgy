@@ -3,6 +3,8 @@ use std::{
     thread,
 };
 
+use anyhow::Context;
+
 use deno_core::{
     v8::{self, script_compiler::Source, Global, Handle},
     JsRuntime, PollEventLoopOptions,
@@ -101,11 +103,14 @@ impl ScriptRuntime {
     }
 
     #[inline(always)]
-    fn echo_line(line: &str, view_line_action_tx: &UnboundedSender<ViewAction>) {
+    fn echo_line(
+        line: &str,
+        view_line_action_tx: &UnboundedSender<ViewAction>,
+    ) -> Result<(), anyhow::Error> {
         let styled_line = Arc::new(StyledLine::from_echo_str(line));
         view_line_action_tx
             .send(ViewAction::AppendCompleteLine(styled_line))
-            .unwrap()
+            .context("Failed to send echo line to view")
     }
 
     fn compile_javascript(scope: &mut v8::HandleScope, source: &str) -> v8::Global<v8::Script> {
@@ -126,7 +131,15 @@ impl ScriptRuntime {
     }
 
     #[inline(always)]
-    fn handle_incoming_action(deno: &mut JsRuntime, view_line_action_tx: &UnboundedSender<ViewAction>, weak_window: &slint::Weak<MainWindow>, incoming_line_history_arc: &Arc<Mutex<IncomingLineHistory>>, write_to_socket_tx: &mut Option<UnboundedSender<Arc<String>>>, compiled_scripts: &mut Vec<v8::Global<v8::Script>>, action: RuntimeAction) {
+    fn handle_incoming_action(
+        deno: &mut JsRuntime,
+        view_line_action_tx: &UnboundedSender<ViewAction>,
+        weak_window: &slint::Weak<MainWindow>,
+        incoming_line_history_arc: &Arc<Mutex<IncomingLineHistory>>,
+        write_to_socket_tx: &mut Option<UnboundedSender<Arc<String>>>,
+        compiled_scripts: &mut Vec<v8::Global<v8::Script>>,
+        action: RuntimeAction,
+    ) -> Result<(), anyhow::Error> {
         let result = match action {
             RuntimeAction::RequestRepaint => ActionResult::RequestRepaint,
             RuntimeAction::Echo(line) => {
@@ -222,8 +235,7 @@ impl ScriptRuntime {
                                     );
                                 }
 
-                                let matches_name =
-                                    v8::String::new(try_catch, "matches").unwrap();
+                                let matches_name = v8::String::new(try_catch, "matches").unwrap();
 
                                 try_catch.get_current_context().global(try_catch).set(
                                     try_catch,
@@ -237,10 +249,7 @@ impl ScriptRuntime {
                                     let exc = try_catch.exception().unwrap();
                                     let exc = exc.to_string(try_catch).unwrap();
                                     let exc = exc.to_rust_string_lossy(try_catch);
-                                    ScriptRuntime::echo_line(
-                                        exc.as_str(),
-                                        &view_line_action_tx,
-                                    );
+                                    ScriptRuntime::echo_line(exc.as_str(), &view_line_action_tx)?;
                                 } else {
                                     if let Some(value) = result {
                                         if value.boolean_value(try_catch) {
@@ -248,8 +257,7 @@ impl ScriptRuntime {
                                                 .open(try_catch)
                                                 .to_rust_string_lossy(try_catch);
 
-                                            for line in str.split(|ch| ch == ';' || ch == '\n')
-                                            {
+                                            for line in str.split(|ch| ch == ';' || ch == '\n') {
                                                 ScriptRuntime::send_line_as_command_input(
                                                     line,
                                                     &view_line_action_tx,
@@ -281,10 +289,8 @@ impl ScriptRuntime {
                 ActionResult::SkipRepaint
             }
             RuntimeAction::CompileJavascriptAlias(source, reply_arc) => {
-                let f = ScriptRuntime::compile_javascript(
-                    &mut deno.handle_scope(),
-                    source.as_str(),
-                );
+                let f =
+                    ScriptRuntime::compile_javascript(&mut deno.handle_scope(), source.as_str());
 
                 let module_id = compiled_scripts.len();
                 compiled_scripts.push(f);
@@ -299,11 +305,12 @@ impl ScriptRuntime {
 
         match result {
             ActionResult::RequestRepaint => {
-                weak_window
-                    .upgrade_in_event_loop(move |handle| handle.window().request_redraw())
-                    .unwrap();
+                match weak_window.upgrade_in_event_loop(move |handle| handle.window().request_redraw()) {
+                    Ok(_) => Ok(()),
+                    Err(_) => Err(anyhow::anyhow!("Failed to request redraw")),
+                }
             }
-            ActionResult::SkipRepaint => {}
+            ActionResult::SkipRepaint => Ok(()),
         }
     }
 
@@ -313,7 +320,7 @@ impl ScriptRuntime {
         weak_window: slint::Weak<MainWindow>,
         incoming_line_history_arc: Arc<Mutex<IncomingLineHistory>>,
     ) {
-        let mut write_to_socket_tx: Option<UnboundedSender<Arc<String>>>= None;
+        let mut write_to_socket_tx: Option<UnboundedSender<Arc<String>>> = None;
 
         let mut deno = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
             ..Default::default()
@@ -335,7 +342,8 @@ impl ScriptRuntime {
                     // this serves to trigger a cancel on the pending receive below when it's time
                     // for the event loop above to tick
                 }
-                Some(action) = scripted_action_rx.recv() => ScriptRuntime::handle_incoming_action(
+                Some(action) = scripted_action_rx.recv() => {
+                    match ScriptRuntime::handle_incoming_action(
                     &mut deno,
                     &view_line_action_tx,
                     &weak_window,
@@ -343,7 +351,14 @@ impl ScriptRuntime {
                     &mut write_to_socket_tx,
                     &mut compiled_scripts,
                     action,
-                )
+                ) {
+                    Err(err) => {
+                        warn!("Error in script runtime: {:?}, ending", err);
+                        break;
+                    }
+                    _ => {}
+                     }
+                }
             }
         }
     }
