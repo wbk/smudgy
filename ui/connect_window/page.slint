@@ -3,17 +3,18 @@
 
 import { Switch, GridBox, ListView, ScrollView, HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
 
-export component Page inherits VerticalBox {
-    in property<string> title: "title";
-    in property<string> description: "description";
-    in property<bool> show-enable-switch: true;
-
-    HorizontalBox {
-        Text {
-            font-size: 24px;
-            text <=> root.title;
+export component Page inherits ScrollView {
+    in property <string> title: "title";
+    in property <bool> show-enable-switch: true;
+    VerticalBox {
+        padding-right: 20px;
+        HorizontalBox {
+            Text {
+                font-size: 24px;
+                text <=> root.title;
+            }
         }
-    }
 
-    @children
+        @children
+    }
 }

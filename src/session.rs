@@ -49,6 +49,7 @@ pub struct Session {
     autocomplete_state: AutocompleteState,
     command_history: CommandHistory,
     hotkey_manager: HotkeyManager,
+    script_runtime: Arc<ScriptRuntime>,
 
     // ----
     connection: Connection,
@@ -84,6 +85,7 @@ impl Session {
             hotkey_manager,
             trigger_manager,
             connection,
+            script_runtime
         }
     }
 
@@ -235,5 +237,9 @@ impl Session {
     pub fn connect(&mut self) {
         self.connection
             .connect(&self.profile.host(), self.profile.port());
+    }
+
+    pub fn close(&self)  {
+        self.script_runtime.tx().send(crate::script_runtime::RuntimeAction::CloseSession).unwrap();
     }
 }

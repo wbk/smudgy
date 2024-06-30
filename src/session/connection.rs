@@ -37,7 +37,8 @@ impl Connection {
         let (tx, mut disconnect_rx) = oneshot::channel();
 
         if let Some(disconnect) = self.disconnect.take() {
-            disconnect.send(()).unwrap();
+            // This will error if the channel is already closed, which is fine
+            disconnect.send(()).ok();
         }
 
         self.disconnect = Some(tx);
@@ -47,12 +48,14 @@ impl Connection {
             let mut vt_processor = VtProcessor::new(arc_trigger_manager);
             let (write_to_socket_tx, mut write_to_socket_rx) = tokio::sync::mpsc::unbounded_channel::<Arc<String>>();
 
-            script_action_tx.send(RuntimeAction::UpdateWriteToSocketTx(Some(write_to_socket_tx))).unwrap();
             script_action_tx.send(RuntimeAction::Echo(Arc::new(format!("\r\nConnecting to {addr}...")))).unwrap();
+            trace!("Connecting to {addr}...");
 
             match TcpStream::connect(addr).await {
                 Ok(mut stream) => {
                     stream.set_nodelay(true).unwrap();
+                    trace!("Connected");
+                    script_action_tx.send(RuntimeAction::UpdateWriteToSocketTx(Some(write_to_socket_tx))).unwrap();
 
                     loop {
                         select! {
@@ -99,15 +102,19 @@ impl Connection {
                         }
                     }
 
-                    script_action_tx.send(RuntimeAction::UpdateWriteToSocketTx(None)).unwrap();
-                    script_action_tx.send(RuntimeAction::Echo(Arc::new(format!("\r\nConnection lost")))).unwrap();
-
+                    // Silently ignore errors here; when a session is closing the runtime may already be gone by the time
+                    // we get here
+                    script_action_tx.send(RuntimeAction::UpdateWriteToSocketTx(None)).map(|_| {
+                        script_action_tx.send(RuntimeAction::Echo(Arc::new(format!("\r\nConnection lost")))).ok();
+                    }).ok();
                 }
                 _ => {
-                    script_action_tx.send(RuntimeAction::Echo(Arc::new(format!("\r\nConnection failed")))).unwrap();
-                    //TODO: Notify of connection failures
+                    script_action_tx.send(RuntimeAction::Echo(Arc::new(format!("\r\nConnection failed")))).map_err(|_| {
+                        warn!("Error notifying runtime of connection failure; ignoring");
+                    }).ok();
                 }
             }
+            trace!("Connection cleaning up");
         });
     }
 }

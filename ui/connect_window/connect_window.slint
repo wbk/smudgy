@@ -12,30 +12,60 @@ import { CheckBox, StandardListView, StyleMetrics, HorizontalBox } from "std-wid
 import { ProfilePage } from "./profile_page.slint";
 import { CreateProfilePage } from "./create_profile_page.slint";
 import { SideBar } from "./side_bar.slint";
+import { Character, Profile, UiResult } from "./types.slint";
 
-export struct ConnectEvent {
-    profile_name: string,
-    character_name: string,
-    host: string,
-    port: int
+export { Character, Profile, UiResult }
+
+enum Mode {
+    show-profile, create-profile
 }
+
+
 export component ConnectWindow inherits Window {
-//    always-on-top: true;
-    preferred-width: 1000px;
+    // always-on-top: true;
+    min-width: 680px;
     preferred-height: 500px;
     title: "Connect to...";
     icon: @image-url("../../assets/icon256.png");
-    callback connect-clicked(ConnectEvent);
+    in-out property <[Profile]> profiles;
+    property <Mode> mode: show-profile;
+    callback connect-clicked(Profile, Character);
+    callback create-profile(Profile) -> UiResult;
+    callback delete-profile(Profile) -> UiResult;
+    callback save-character(Profile, Character) -> UiResult;
+    callback delete-character(Profile, Character) -> UiResult;
+    callback refresh-profiles();
 
-    HorizontalBox {
+    public function set-selected-profile-idx(idx: int) {
+        side-bar.current-profile-idx = idx;
+        side-bar.selection-changed();
+    }
+
+    HorizontalLayout {
         side-bar := SideBar {
-            title: @tr("Slint Widgets Gallery");
-            model: ["ArcticMUD"];
-        }
-
-        ScrollView {
-            child := CreateProfilePage {
+            title: @tr("Connect");
+            profiles: root.profiles;
+            new-profile-clicked => {
+                mode = Mode.create-profile;
+            }
+            selection-changed => {
+                mode = Mode.show-profile;
             }
         }
+
+        if mode == Mode.create-profile: CreateProfilePage {
+                create-profile(profile) => {create-profile(profile)}
+            }
+        
+
+        if mode == Mode.show-profile: profile-page := 
+            ProfilePage {
+                profile: side-bar.current_profile();
+                connect(profile, character) => {
+                    connect-clicked(profile, character);
+                }
+                save-character(profile, character) => {save-character(profile, character)}
+                delete-character(profile, character) => {delete-character(profile, character)}
+            }
     }
 }

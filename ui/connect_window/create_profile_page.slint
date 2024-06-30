@@ -2,169 +2,75 @@
 // SPDX-License-Identifier: MIT
 
 import { Button, GroupBox, SpinBox, ComboBox, CheckBox, LineEdit, TabWidget, VerticalBox, HorizontalBox,
-    Slider, ProgressIndicator, SpinBox, Switch, Spinner, GridBox } from "std-widgets.slint";
+    Slider, ProgressIndicator, SpinBox, Switch, Spinner, GridBox, Palette } from "std-widgets.slint";
 import { Page } from "./page.slint";
+import { Profile, UiResult } from "./types.slint";
+import { MessageOverlay } from "../components/message_overlay.slint";
 
 export component CreateProfilePage inherits Page {
-    title: @tr("Controls");
-    description: @tr("This page gives an overview of the default widget set provided by Slint. The widgets are available in different styles native, fluent-(dark/light) and material-(dark/light). The widgets can be imported from \"std-widgets.slint\".");
-    GroupBox {
-        vertical-stretch: 0;
-        title: @tr("Buttons");
-        VerticalLayout {
-            padding: 0px;
-            HorizontalBox {
-                alignment: start;
-                Button {
-                    text: @tr("Regular Button");
-                }
-
-                Button {
-                    text: @tr("Primary Button with Icon");
-                    primary: true;
-                }
-
-                Button {
-                    primary: true;
-                }
-
-                Button {
-                    checkable: true;
-                    text: self.checked ? @tr("ON") : @tr("OFF");
-                }
-            }
-
-            HorizontalBox {
-                alignment: start;
-                Button {
-                    text: @tr("Primary Button with colorized icon");
-                    colorize-icon: true;
-                    primary: true;
-                }
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("CheckBox - ComboBox - Switch");
-        vertical-stretch: 0;
-        HorizontalBox {
-            alignment: start;
-            padding: 0px;
-            checkbox := CheckBox {
-                text: checkbox.checked ? @tr("(checked)") : @tr("(unchecked)");
-                checked: true;
-            }
-
-            ComboBox {
-                model: [@tr("Select Something"), @tr("From this"), @tr("Combobox")];
-            }
-
-            Switch {
-                text: @tr("Flight Mode");
-                checked: true;
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("LineEdit - SpinBox - TimePicker - DatePicker");
-        vertical-stretch: 0;
-        HorizontalBox {
-            alignment: start;
-            padding: 0px;
-            LineEdit {
-                placeholder-text: @tr("Enter some text");
-            }
-
-            SpinBox {
-                vertical-stretch: 0;
-                value: 42;
-            }
-
-        }
-    }
-
-    GroupBox {
-        title: @tr("Slider");
-        vertical-stretch: 0;
-        i-slider := Slider {
-            min-width: 160px;
-            minimum: -100;
-            maximum: 100;
-            value: 42;
-        }
-    }
-
-    GroupBox {
-        title: @tr("ProgressIndicator | Spinner");
-        vertical-stretch: 0;
-        GridBox {
-            spacing: 16px;
-            i-progress-indicator := ProgressIndicator {
-                row: 0;
-                col: 0;
-                min-width: 160px;
-                progress: (i-slider.value - i-slider.minimum) / (i-slider.maximum - i-slider.minimum);
-                indeterminate: true;
-            }
-
-            Rectangle {
-                row: 0;
-                col: 1;
-                rowspan: 2;
-                Spinner {
-                    progress: i-progress-indicator.progress;
-                    indeterminate: i-progress-indicator.indeterminate;
-                }
-            }
-
-            CheckBox {
-                row: 1;
-                col: 0;
-                text: @tr("indeterminate");
-                checked <=> i-progress-indicator.indeterminate;
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("TabWidget");
-        TabWidget {
-            Tab {
-                title: @tr("Tab 1");
-                VerticalBox {
+    title: @tr("Create Profile");
+    callback create-profile(Profile) -> UiResult;
+    property <Profile> profile;
+    property <UiResult> result;
+    Rectangle {
+        GroupBox {
+            vertical-stretch: 0;
+            title: @tr("Details");
+            VerticalLayout {
+                padding: 0px;
+                HorizontalBox {
                     alignment: start;
-                    GroupBox {
-                        title: @tr("Content of tab 1");
-                        HorizontalBox {
-                            alignment: start;
-                        }
-                    }
-                }
-            }
-
-            Tab {
-                title: @tr("Tab 2");
-                VerticalBox {
-                    alignment: start;
-                    GroupBox {
-                        title: @tr("Content of tab 2");
+                    VerticalBox {
                         VerticalBox {
-                            alignment: start;
+                            Text {
+                                text: @tr("Name");
+                            }
+
+                            name-input := LineEdit {
+                                placeholder-text: @tr("The name of the profile, e.g. SmudgyMUD");
+                            }
+                        }
+
+                        HorizontalLayout {
+                            VerticalBox {
+                                width: 200px;
+                                Text {
+                                    text: @tr("Host");
+                                }
+
+                                host-input := LineEdit {
+                                    placeholder-text: "e.g. mud.example.com";
+                                }
+                            }
+
+                            VerticalBox {
+                                Text {
+                                    text: @tr("Port");
+                                }
+
+                                port-input := LineEdit {
+                                    input-type: number;
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: @tr("Create");
+                            clicked => {
+                                result = create-profile({ name: name-input.text, host: host-input.text, port: port-input.text.to-float() });
+                                if (!result.success) {
+                                    message-box.active = true;
+                                }
+                            }
                         }
                     }
                 }
             }
-
-            Tab {
-                title: @tr("Tab 3");
-                VerticalBox {
-                    Text {
-                        text: @tr("Content of tab 3");
-                    }
-                }
-            }
         }
+    
+        message-box := MessageOverlay {
+            message: result.message;
+        }
+        
     }
 }

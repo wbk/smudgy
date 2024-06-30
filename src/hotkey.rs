@@ -34,52 +34,52 @@ impl HotkeyManager {
         me.push(Hotkey {
             name: "n".into(),
             scancode: 72,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("n".into())),
+            script: RuntimeAction::SendRaw(Arc::new("n".into())),
         });
         me.push(Hotkey {
             name: "e".into(),
             scancode: 77,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("e".into())),
+            script: RuntimeAction::SendRaw(Arc::new("e".into())),
         });
         me.push(Hotkey {
             name: "s".into(),
             scancode: 80,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("s".into())),
+            script: RuntimeAction::SendRaw(Arc::new("s".into())),
         });
         me.push(Hotkey {
             name: "w".into(),
             scancode: 75,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("w".into())),
+            script: RuntimeAction::SendRaw(Arc::new("w".into())),
         });
         me.push(Hotkey {
             name: "u".into(),
             scancode: 73,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("u".into())),
+            script: RuntimeAction::SendRaw(Arc::new("u".into())),
         });
         me.push(Hotkey {
             name: "d".into(),
             scancode: 81,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("d".into())),
+            script: RuntimeAction::SendRaw(Arc::new("d".into())),
         });
         me.push(Hotkey {
             name: "st".into(),
             scancode: 71,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("st".into())),
+            script: RuntimeAction::SendRaw(Arc::new("st".into())),
         });
         me.push(Hotkey {
             name: "rest".into(),
             scancode: 79,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("rest".into())),
+            script: RuntimeAction::SendRaw(Arc::new("rest".into())),
         });
         me.push(Hotkey {
             name: "scan".into(),
             scancode: 78,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("scan".into())),
+            script: RuntimeAction::SendRaw(Arc::new("scan".into())),
         });
         me.push(Hotkey {
             name: "look".into(),
             scancode: 76,
-            script: RuntimeAction::StringLiteralCommand(Arc::new("look".into())),
+            script: RuntimeAction::SendRaw(Arc::new("look".into())),
         });
 
         me

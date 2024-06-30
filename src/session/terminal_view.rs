@@ -64,6 +64,8 @@ static ANSI_COLOR_TABLE: [slint::Color; 16] = [
     ANSI_WHITE_BOLD,
 ];
 
+const NON_SCROLLBACK_SIZE_IN_LINES: i32 = 15;
+
 enum ScrollPosition {
     PinnedToEnd,
     ToLine(i32),
@@ -337,6 +339,8 @@ impl TerminalView {
             ScrollPosition::ToLine(value)
         };
 
+        self.cached_row_count.replace(ViewableRowCount::Dirty);
+
         self.notify.reset();
     }
 
@@ -400,7 +404,17 @@ impl slint::Model for TerminalView {
                 let mut count = 0;
 
                 let mut lines = self.lines.borrow_mut();
-                for line in lines.iter_mut().rev() {
+
+                let offset =
+                    if let ScrollPosition::ToLine(ref line) = *self.scroll_position.borrow() {
+                        max(0, lines.len() as i32 - line) as usize
+                    } else {
+                        0 as usize
+                    };
+
+                let mut scrollback_iter = lines.iter_mut().rev();
+                // the first NON_SCROLLBACK_SIZE_IN_LINES (bottom) lines always start from the end
+                for line in &mut scrollback_iter {
                     let pixel_buffer = line.pixel_buffer(
                         &self.row_pixel_buffer_cache,
                         &self.font,
@@ -412,11 +426,34 @@ impl slint::Model for TerminalView {
                     }
                     height -= line_height;
                     count += 1;
+                    if count == NON_SCROLLBACK_SIZE_IN_LINES {
+                        break;
+                    }
                 }
-                *cached_row_count = ViewableRowCount::Clean(count);
+                if count == NON_SCROLLBACK_SIZE_IN_LINES {
+                    if let Some(_) = scrollback_iter.nth(offset) {
+                        // subsequent lines come from the scrollback
+
+                        for line in scrollback_iter {
+                            let pixel_buffer = line.pixel_buffer(
+                                &self.row_pixel_buffer_cache,
+                                &self.font,
+                                viewable_size.0.into(),
+                            );
+                            let line_height = pixel_buffer.height();
+                            if line_height >= height {
+                                break;
+                            }
+                            height -= line_height;
+                            count += 1;
+                        }
+                    }
+                }
+
+                *cached_row_count = ViewableRowCount::Clean(count as usize);
                 self.row_count_model.replace(lines.len() as i32);
 
-                count
+                count as usize
             }
         }
     }
@@ -429,11 +466,11 @@ impl slint::Model for TerminalView {
         let mut offset = lines.len() - self.row_count();
 
         if let ScrollPosition::ToLine(scroll_line) = *scroll_position {
-            if row + offset + 15 < lines.len() {
+            if row + offset + (NON_SCROLLBACK_SIZE_IN_LINES as usize) < lines.len() {
                 offset = max(
                     0,
                     (scroll_line as usize)
-                        .checked_sub(self.row_count() + 15)
+                        .checked_sub(self.row_count())
                         .or(Some(0))
                         .unwrap(),
                 );

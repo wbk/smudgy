@@ -24,12 +24,12 @@ export component ScrollBar inherits Rectangle {
 
     public function forwarded-scroll-event(event: PointerScrollEvent) -> EventResult {
         if (root.horizontal && event.delta-x != 0) {
-            last-value = min(root.maximum, max(0,  value() - (event.delta-x * page-size) / root.height + event.delta-x / abs(event.delta-x)));
+            last-value = min(root.maximum, max(0,  value() - (event.delta-x * page-size) / root.height));
             is-scrolled-to-end = last-value == maximum;
             value-changed(is-scrolled-to-end ? -1 : last-value);
             return accept;
         } else if (!root.horizontal && event.delta-y != 0) {
-            last-value = min(root.maximum, max(0, value() - (event.delta-y * page-size) / root.height + event.delta-y / abs(event.delta-y)));
+            last-value = min(root.maximum, max(0, value() - (event.delta-y * page-size) / root.height));
             is-scrolled-to-end = last-value == maximum;
             value-changed(is-scrolled-to-end ? -1 : last-value);
             return accept;
@@ -85,7 +85,8 @@ export component ScrollBar inherits Rectangle {
                 self.pressed-value = value();
                 active = true;
             } else if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
-                value(); // this shouldn't be necessary but is?
+                active = false;
+            } else if (event.kind == PointerEventKind.cancel) {
                 active = false;
             }
         }

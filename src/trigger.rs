@@ -1,5 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+    vec,
+};
 
+use anyhow::{bail, Result};
 use regex::{Regex, RegexSet};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
@@ -15,33 +20,28 @@ enum Action {
     Noop,
     SendRaw(Arc<String>),
     ProcessAlias(Arc<String>),
-    ProcessJavascriptAlias(usize),
-}
-
-// Similar to above, but allows for args to be passed to scripts
-#[derive(Clone, Debug)]
-pub enum InterpretedAction {
-    Noop,
-    SendRaw(Arc<String>),
-    ProcessAlias(Arc<String>),
-    ProcessJavascriptAlias(usize, Arc<Vec<(String, String)>>),
+    EvalJavascript(usize),
 }
 
 #[derive(Debug)]
 pub struct TriggerManager {
-    trigger_regex_set: Arc<Mutex<RegexSet>>,
-    alias_regex_set: Arc<Mutex<RegexSet>>,
-    triggers: Arc<Mutex<Vec<Trigger>>>,
-    aliases: Arc<Mutex<Vec<Alias>>>,
+    trigger_regex_set: RegexSet,
+    alias_regex_set: RegexSet,
+    triggers: Vec<Trigger>,
+    aliases: Vec<Alias>,
     script_eval_tx: UnboundedSender<RuntimeAction>,
+}
+
+fn line_splitter(ch: char) -> bool {
+    ch == ';' || ch == '\n'
 }
 
 impl TriggerManager {
     pub fn new(script_eval_tx: UnboundedSender<RuntimeAction>) -> Self {
-        let triggers = Arc::new(Mutex::new(Vec::new()));
-        let aliases = Arc::new(Mutex::new(Vec::new()));
-        let trigger_regex_set = Arc::new(Mutex::new(RegexSet::empty()));
-        let alias_regex_set = Arc::new(Mutex::new(RegexSet::empty()));
+        let triggers = Vec::new();
+        let aliases = Vec::new();
+        let trigger_regex_set = RegexSet::empty();
+        let alias_regex_set = RegexSet::empty();
 
         let mut me = Self {
             trigger_regex_set,
@@ -54,7 +54,7 @@ impl TriggerManager {
         me.push_trigger(Trigger {
             name: "autoloot".into(),
             regex: Regex::new(r"is dead! R\.I\.P\.$").unwrap(),
-            script: InterpretedAction::ProcessAlias(Arc::new(
+            script: Action::ProcessAlias(Arc::new(
                 "exa corpse;get all.pile.coins corpse".into(),
             )),
         });
@@ -63,7 +63,7 @@ impl TriggerManager {
             name: "order joy".into(),
             regex: Regex::new(r"^oj\s+(?<command>.*)$").unwrap(),
 
-            script: Action::ProcessJavascriptAlias(me.get_precompiled_alias_from_script(
+            script: Action::EvalJavascript(me.get_precompiled_alias_from_script(
                 r#"
 
                 `order joy ${matches.command}`
@@ -76,7 +76,7 @@ impl TriggerManager {
             name: "watch joy".into(),
             regex: Regex::new(r"^wj$").unwrap(),
 
-            script: Action::ProcessJavascriptAlias(me.get_precompiled_alias_from_script(
+            script: Action::EvalJavascript(me.get_precompiled_alias_from_script(
                 r#"
 
                 ["watch", "joy"].join(' ')
@@ -89,7 +89,7 @@ impl TriggerManager {
             name: "unlock/open".into(),
             regex: Regex::new(r"^unop\s+(.*)$").unwrap(),
 
-            script: Action::ProcessJavascriptAlias(me.get_precompiled_alias_from_script(
+            script: Action::EvalJavascript(me.get_precompiled_alias_from_script(
                 r#"
 
                 `unlock ${matches.$1};open ${matches.$1}`
@@ -102,7 +102,7 @@ impl TriggerManager {
             name: "do whatever".into(),
             regex: Regex::new(r"^/js (.*)$").unwrap(),
 
-            script: Action::ProcessJavascriptAlias(me.get_precompiled_alias_from_script(
+            script: Action::EvalJavascript(me.get_precompiled_alias_from_script(
                 r#"
 
                 eval(matches.$1)
@@ -115,29 +115,21 @@ impl TriggerManager {
     }
 
     fn push_trigger(&mut self, trigger: Trigger) {
-        let mut triggers = self.triggers.lock().unwrap();
-        triggers.push(trigger);
-        drop(triggers);
+        self.triggers.push(trigger);
         self.rebuild_trigger_regex_set();
     }
 
     fn push_alias(&mut self, alias: Alias) {
-        let mut aliases = self.aliases.lock().unwrap();
-        aliases.push(alias);
-        drop(aliases);
+        self.aliases.push(alias);
         self.rebuild_alias_regex_set();
     }
 
     fn rebuild_trigger_regex_set(&mut self) {
-        let triggers = self.triggers.lock().unwrap();
-        let mut regex_set = self.trigger_regex_set.lock().unwrap();
-        *regex_set = RegexSet::new(triggers.iter().map(|trigger| trigger.regex.as_str())).unwrap();
+        self.trigger_regex_set = RegexSet::new(self.triggers.iter().map(|trigger| trigger.regex.as_str())).unwrap();
     }
 
     fn rebuild_alias_regex_set(&mut self) {
-        let aliases = self.aliases.lock().unwrap();
-        let mut regex_set = self.alias_regex_set.lock().unwrap();
-        *regex_set = RegexSet::new(aliases.iter().map(|alias| alias.regex.as_str())).unwrap();
+        self.alias_regex_set = RegexSet::new(self.aliases.iter().map(|alias| alias.regex.as_str())).unwrap();
     }
 
     fn get_precompiled_alias_from_script(&self, source: &str) -> usize {
@@ -152,17 +144,24 @@ impl TriggerManager {
     }
 
     pub fn process_incoming_line(&self, line: Arc<StyledLine>) {
-        let regex_set = self.trigger_regex_set.lock().unwrap();
+        let regex_set = &self.trigger_regex_set;
         let matches: Vec<_> = regex_set.matches(line.as_str()).iter().collect();
         if matches.len() > 0 {
-            let triggers = self.triggers.lock().unwrap();
-            let to_send: Vec<InterpretedAction> = matches
-                .iter()
-                .map(|i| triggers.get(*i).unwrap().script.clone())
-                .collect();
-            self.script_eval_tx
-                .send(RuntimeAction::EvalTriggerScripts(line, Arc::new(to_send)))
-                .unwrap();
+            let triggers = &self.triggers;
+            for trigger_idx in matches {
+                match triggers.get(trigger_idx).unwrap().script {
+                    Action::Noop => {}
+                    Action::SendRaw(ref str) => {
+                        self.script_eval_tx.send(RuntimeAction::SendRaw(str.clone())).unwrap();
+                    }
+                    Action::ProcessAlias(ref str) => {
+                        self.process_outgoing_line(str.as_str());
+                    }
+                    Action::EvalJavascript(_script_id) => {
+                        unimplemented!()
+                    }
+                }
+            }
         } else {
             self.script_eval_tx
                 .send(RuntimeAction::PassthroughCompleteLine(line))
@@ -170,68 +169,87 @@ impl TriggerManager {
         }
     }
 
-    pub fn process_outgoing_line(&self, line: &str) {
-        let regex_set = self.alias_regex_set.lock().unwrap();
-        let matches: Vec<_> = regex_set.matches(line).iter().collect();
-        if matches.len() > 0 {
-            let aliases = self.aliases.lock().unwrap();
-            let to_send: Vec<InterpretedAction> = matches
-                .iter()
-                .map(|i| match aliases.get(*i).unwrap() {
-                    Alias {
-                        name: _,
-                        regex,
-                        script: Action::ProcessJavascriptAlias(script),
-                    } => {
-                        let mut i = 0;
-                        let captures: Arc<Vec<_>> = Arc::new(
-                            regex
-                                .capture_names()
-                                .zip(regex.captures(line).unwrap().iter())
-                                .map(|(k, v)| {
-                                    let pair = (
-                                        k.and_then(|k| Some(k.to_string()))
-                                            .unwrap_or_else(|| format!("${i}")),
-                                        v.and_then(|v| Some(v.as_str())).unwrap_or("").to_string(),
-                                    );
-                                    i += 1;
-                                    pair
-                                })
-                                .collect(),
-                        );
-                        InterpretedAction::ProcessJavascriptAlias(*script, captures)
-                    }
-                    Alias {
-                        name: _,
-                        regex: _,
-                        script: Action::ProcessAlias(script),
-                    } => InterpretedAction::ProcessAlias(script.clone()),
-                    Alias {
-                        name: _,
-                        regex: _,
-                        script: Action::SendRaw(script),
-                    } => InterpretedAction::SendRaw(script.clone()),
-                    Alias {
-                        name: _,
-                        regex: _,
-                        script: Action::Noop,
-                    } => InterpretedAction::Noop,
-                })
-                .collect();
-            self.script_eval_tx
-                .send(RuntimeAction::EvalAliasScripts(
-                    Arc::new(String::from(line)),
-                    Arc::new(to_send),
-                    0,
-                ))
-                .unwrap();
-        } else {
-            self.script_eval_tx
-                .send(RuntimeAction::StringLiteralCommand(Arc::new(String::from(
-                    line,
-                ))))
-                .unwrap();
+    #[inline(always)]
+    fn process_outgoing_line_inner(&self, line: &str, depth: u32) -> Result<()> {
+        if depth > 100 {
+            bail!("Alias processor bailing, depth limit reached. Do you have an alias that triggers itself?");
         }
+        // Technically an outgoing line can be split into multiple lines, separated by newlines or ';' characters so we need to process each one
+        for line in line.split(line_splitter) {
+            let line_arc = Arc::new(line.to_string());
+
+            let matches: Vec<_> = self.alias_regex_set.matches(line).iter().collect();
+            if matches.len() > 0 {
+                let aliases = &self.aliases;
+                for match_idx in matches {
+                    match aliases.get(match_idx).unwrap() {
+                        Alias {
+                            name: _,
+                            regex,
+                            script: Action::EvalJavascript(script),
+                        } => {
+                            let mut i = 0;
+                            let captures: Arc<Vec<_>> = Arc::new(
+                                regex
+                                    .capture_names()
+                                    .zip(regex.captures(line).unwrap().iter())
+                                    .map(|(k, v)| {
+                                        let pair = (
+                                            k.and_then(|k| Some(k.to_string()))
+                                                .unwrap_or_else(|| format!("${i}")),
+                                            v.and_then(|v| Some(v.as_str()))
+                                                .unwrap_or("")
+                                                .to_string(),
+                                        );
+                                        i += 1;
+                                        pair
+                                    })
+                                    .collect(),
+                            );
+                            let (tx, rx) = oneshot::channel();
+                            self.script_eval_tx.send(RuntimeAction::EvalJavascriptAlias(
+                                line_arc.clone(),
+                                    *script,
+                                    captures,
+                                    Arc::new(tx),
+                            ))?;
+                            rx.blocking_recv().map(|response| {
+                                response.map(|line| {
+                                    self.process_outgoing_line_inner(line.as_str(), depth + 1)
+                                })
+                            })?;
+                        }
+                        Alias {
+                            name: _,
+                            regex: _,
+                            script: Action::ProcessAlias(script),
+                        } => self.process_outgoing_line_inner(script.as_str(), depth + 1)?,
+                        Alias {
+                            name: _,
+                            regex: _,
+                            script: Action::SendRaw(script),
+                        } => self
+                            .script_eval_tx
+                            .send(RuntimeAction::SendRaw(script.clone()))?,
+                        Alias {
+                            name: _,
+                            regex: _,
+                            script: Action::Noop,
+                        } => {}
+                    }
+                }
+            } else {
+                self.script_eval_tx
+                    .send(RuntimeAction::SendRaw(Arc::new(String::from(
+                        line,
+                    ))))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn process_outgoing_line(&self, line: &str) {
+        self.process_outgoing_line_inner(line, 0).unwrap();
     }
 
     pub fn process_partial_line(&self, line: Arc<StyledLine>) {
@@ -252,11 +270,11 @@ impl TriggerManager {
 pub struct Trigger {
     pub name: String,
     pub regex: Regex,
-    pub script: InterpretedAction,
+    pub script: Action,
 }
 
 impl Trigger {
-    pub fn new(name: String, regex: Regex, script: InterpretedAction) -> Self {
+    pub fn new(name: String, regex: Regex, script: Action) -> Self {
         Self {
             name,
             regex,

@@ -2,172 +2,257 @@
 // SPDX-License-Identifier: MIT
 
 import { Button, GroupBox, SpinBox, ComboBox, CheckBox, LineEdit, TabWidget, VerticalBox, HorizontalBox,
-    Slider, ProgressIndicator, SpinBox, Switch, Spinner, GridBox } from "std-widgets.slint";
+    Slider, ProgressIndicator, SpinBox, Switch, Spinner, GridBox, TextEdit, Palette } from "std-widgets.slint";
 import { Page } from "./page.slint";
+import { Profile, Character, UiResult } from "./types.slint";
+import { HeroIconsOutline } from "../globals.slint";
 
-export component ProfilePage inherits Page {
-    title: @tr("Controls");
-    description: @tr("This page gives an overview of the default widget set provided by Slint. The widgets are available in different styles native, fluent-(dark/light) and material-(dark/light). The widgets can be imported from \"std-widgets.slint\".");
-    GroupBox {
-        vertical-stretch: 0;
-        title: @tr("Buttons");
-        VerticalLayout {
-            padding: 0px;
-            HorizontalBox {
-                alignment: start;
-                Button {
-                    text: @tr("Regular Button");
-                }
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.2 OR LicenseRef-Slint-commercial
 
-                Button {
-                    text: @tr("Primary Button with Icon");
-                    icon: @image-url("../../thumbsup.png");
-                    primary: true;
-                }
+component CharacterBox {
+    in-out property <Character> character;
+    in property <bool> enabled: true;
+    property <bool> open: false;
+    property <bool> dirty: false;
+    callback connect;
+    callback save-character(Character) -> UiResult;
+    callback delete-character(Character) -> UiResult;
+    padding-top: 0;
+    VerticalLayout {
+        spacing: 6px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        Rectangle {
+            title-row := HorizontalLayout {
+                spacing: 8px;
 
-                Button {
-                    icon: @image-url("../../thumbsup.png");
-                    primary: true;
-                }
-
-                Button {
-                    checkable: true;
-                    text: self.checked ? @tr("ON") : @tr("OFF");
-                }
-            }
-
-            HorizontalBox {
-                alignment: start;
-                Button {
-                    text: @tr("Primary Button with colorized icon");
-                    icon: @image-url("../../thumbsup.png");
-                    colorize-icon: true;
-                    primary: true;
-                }
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("CheckBox - ComboBox - Switch");
-        vertical-stretch: 0;
-        HorizontalBox {
-            alignment: start;
-            padding: 0px;
-            checkbox := CheckBox {
-                text: checkbox.checked ? @tr("(checked)") : @tr("(unchecked)");
-                checked: true;
-            }
-
-            ComboBox {
-                model: [@tr("Select Something"), @tr("From this"), @tr("Combobox")];
-            }
-
-            Switch {
-                text: @tr("Flight Mode");
-                checked: true;
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("LineEdit - SpinBox - TimePicker - DatePicker");
-        vertical-stretch: 0;
-        HorizontalBox {
-            alignment: start;
-            padding: 0px;
-            LineEdit {
-                placeholder-text: @tr("Enter some text");
-            }
-
-            SpinBox {
-                vertical-stretch: 0;
-                value: 42;
-            }
-
-        }
-    }
-
-    GroupBox {
-        title: @tr("Slider");
-        vertical-stretch: 0;
-        i-slider := Slider {
-            min-width: 160px;
-            minimum: -100;
-            maximum: 100;
-            value: 42;
-        }
-    }
-
-    GroupBox {
-        title: @tr("ProgressIndicator | Spinner");
-        vertical-stretch: 0;
-        GridBox {
-            spacing: 16px;
-            i-progress-indicator := ProgressIndicator {
-                row: 0;
-                col: 0;
-                min-width: 160px;
-                progress: (i-slider.value - i-slider.minimum) / (i-slider.maximum - i-slider.minimum);
-                indeterminate: true;
-            }
-
-            Rectangle {
-                row: 0;
-                col: 1;
-                rowspan: 2;
-                Spinner {
-                    progress: i-progress-indicator.progress;
-                    indeterminate: i-progress-indicator.indeterminate;
-                }
-            }
-
-            CheckBox {
-                row: 1;
-                col: 0;
-                text: @tr("indeterminate");
-                checked <=> i-progress-indicator.indeterminate;
-            }
-        }
-    }
-
-    GroupBox {
-        title: @tr("TabWidget");
-        TabWidget {
-            Tab {
-                title: @tr("Tab 1");
-                VerticalBox {
-                    alignment: start;
-                    GroupBox {
-                        title: @tr("Content of tab 1");
-                        HorizontalBox {
-                            alignment: start;
-                        }
+                VerticalLayout {
+                    spacing: 2px;
+                    if !open: label := Text {
+                        vertical-stretch: 0;
+                        color: !root.enabled ? Palette.alternate-foreground : Palette.foreground;
+                        font-size: 18px;
+                        font-weight: 500;
+                        text: character.name;
                     }
-                }
-            }
-
-            Tab {
-                title: @tr("Tab 2");
-                VerticalBox {
-                    alignment: start;
-                    GroupBox {
-                        title: @tr("Content of tab 2");
-                        VerticalBox {
-                            alignment: start;
-                        }
+                    if open: label-edit := LineEdit {
+                        text: character.name;
+                        font-size: 18px;
+                        height: 32px;
+                        placeholder-text: "Name";
                     }
-                }
-            }
 
-            Tab {
-                title: @tr("Tab 3");
-                VerticalBox {
+                    Rectangle {}
+
+                    if !open: subtext := Text {
+                        vertical-stretch: 0;
+                        color: !root.enabled ? Palette.alternate-foreground : Palette.foreground;
+                        font-size: 14px;
+                        font-weight: 400;
+                        text: character.subtext;
+                    }
+                    if open: subtext-edit := LineEdit {
+                        text: character.subtext;
+                        placeholder-text: "Anything you would like to show here";
+                        font-size: 14px;
+                        height: 24px;
+                    }
+
+                    
+                }
+
+                Rectangle {}
+
+                if !open: VerticalLayout {
+                    alignment: end;
+                    spacing: 8px;
                     Text {
-                        text: @tr("Content of tab 3");
+                        height: 16px;
+                        font-size: 12px;
+                        color: Palette.foreground.darker(80%);
+                        font-italic: true;
+                        text: character.last-used;
+                    }    
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {}
+                        connect := Button {
+                            horizontal-stretch: 0;
+                            text: "Connect";
+                            primary: true;
+                            clicked => {
+                                root.connect();
+                            }
+                        }
+
+                        Button {
+                            horizontal-stretch: 0;
+                            icon: HeroIconsOutline.ellipsis-horizontal;
+                            colorize-icon: true;
+                            enabled: !open;
+                            clicked => {
+                                open = true;
+                            }
+                        }
+                    }
+                }
+            }
+                states [
+                    is-closed when !open: {
+                        border-radius: 6px;
+                        background: Palette.alternate-background;
+                        border-width: 1px;
+                        border-color: Palette.border;
+                        title-row.padding: 8px;
+                    }
+                ]
+            }
+
+            if open: Rectangle {
+                vertical-stretch: 1;
+                border-radius: 6px;
+                background: Palette.alternate-background;
+                border-width: 1px;
+                border-color: Palette.border;
+                GridLayout {
+                    padding: 8px;
+                    VerticalBox {
+                        GroupBox {
+                            title: "Send on connect";
+                            HorizontalBox {
+                                send-on-connect := TextEdit {
+                                    edited => {
+                                        dirty = true;
+                                    }
+                                    min-height: 64px;
+                                }
+
+                                Image {
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            character.send-on-connect-hidden = !character.send-on-connect-hidden
+                                        }
+                                    }
+
+                                    source: character.send-on-connect-hidden ? HeroIconsOutline.eye-slash : HeroIconsOutline.eye;
+                                    colorize: white;
+                                    width: 18px;
+                                    y: 0;
+                                    height: 18px;
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                icon: HeroIconsOutline.trash;
+                                colorize-icon: true;
+                                primary: false;
+                            }
+
+                            Rectangle { }
+
+                            Button {
+                                text: "Cancel";
+                                primary: false;
+                                enabled: open;
+                                clicked => {
+                                    open = false;
+                                }
+                            }
+
+                            Button {
+                                text: "Save";
+                                primary: true;
+                                enabled: dirty;
+                            }
+                        }
                     }
                 }
             }
         }
     }
-}
+    
+
+    export component ProfilePage inherits Page {
+        callback connect(Profile, Character);
+        callback save-character(Profile, Character) -> UiResult;
+        callback delete-character(Profile, Character) -> UiResult;
+        in-out property <Profile> profile;
+        title: profile.name;
+        GroupBox {
+            vertical-stretch: 0;
+            title: @tr("Details");
+            VerticalLayout {
+                padding: 0px;
+                HorizontalBox {
+                    alignment: start;
+                    Text {
+                        text: @tr("Hostname");
+                        horizontal-stretch: 0;
+                    }
+
+                    LineEdit {
+                        text: profile.host;
+                        horizontal-stretch: 1;
+                    }
+
+                    Text {
+                        text: @tr("Port");
+                        horizontal-stretch: 0;
+                    }
+
+                    LineEdit {
+                        text: profile.port;
+                        input-type: number;
+                        horizontal-stretch: 0.3;
+                    }
+                }
+
+                HorizontalBox {
+                    alignment: space-between;
+                    Button {
+                        icon: HeroIconsOutline.trash;
+                        colorize-icon: true;
+                        enabled: true;
+                    }
+
+                    Button {
+                        text: @tr("Save");
+                        enabled: false;
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            alignment: space-between;
+            Text {
+                padding-top: 24px;
+                font-size: 18px;
+                height: 30px;
+                text: "Characters";
+            }
+
+            Button {
+                text: "New Character";
+                icon: HeroIconsOutline.plus;
+                colorize-icon: true;
+                height: 24px;
+                primary: true;
+            }
+        }
+
+        for character[index] in profile.characters: CharacterBox {
+            character: character;
+            connect => {connect(profile, character)}
+            save-character => {save-character(profile, character)}
+            delete-character => {delete-character(profile,character)}
+        }
+
+        Rectangle {}
+    }

@@ -12,22 +12,6 @@ component ToolbarItem inherits Rectangle {
     border-color: primary ? Palette.button-primary-color : Palette.button-secondary-color;
     callback clicked <=> touch-area.clicked;
     out property has-hover <=> touch-area.has-hover;
-    // states [
-    //     has-hover when touch-area.has-hover: {
-    //         in {
-    //             animate background, label-text.color {
-    //                 duration: 65ms;
-    //                 easing: ease-in;
-    //             }
-    //         }
-    //         out {
-    //             animate background, label-text.color {
-    //                 duration: 65ms;
-    //                 easing: ease-out;
-    //             }
-    //         }
-    //     }
-    // ]
     touch-area := TouchArea {
         mouse-cursor: MouseCursor.pointer;
     }
@@ -51,26 +35,27 @@ export component Toolbar inherits VerticalLayout {
     private property <bool> open: true;
     callback create-session-clicked;
     callback fullscreen-clicked;
+    callback close-clicked;
     callback configure-clicked;
     callback automate-clicked;
     callback map-clicked;
     callback drag-window;
 
-    function show(show: bool) {
+    public function show(show: bool) {
         open = show;
     }
 
-    pure function should-appear() -> bool {
+    pure public function should-appear() -> bool {
         return open;
     }
 
-    pure function should-suppress() -> bool {
+    pure public function should-suppress() -> bool {
         return !open && cover-rect.opacity == 0;
     }
     states [
         has-hover when should-appear(): {
             border-rect.opacity: 1;
-            cover-rect.opacity: 0.6;
+            cover-rect.opacity: 0.9;
             toolbar-area.height: 167px;
             in {
                 animate border-rect.opacity, cover-rect.opacity, toolbar-area.height {
@@ -117,8 +102,8 @@ export component Toolbar inherits VerticalLayout {
                     opacity: 0;
                     background: Palette.toolbar-background;
                     Image {
-                        x: root.width - self.width - 24px;
-                        y: 24px;
+                        x: root.width - self.width - 18px - (is-full-screen ? 36px : 0px);
+                        y: 18px;
                         source: is-full-screen ? HeroIconsOutline.arrows-pointing-in : HeroIconsOutline.arrows-pointing-out;
                         colorize: Palette.button-secondary-color;
                         width: 18px;
@@ -127,6 +112,21 @@ export component Toolbar inherits VerticalLayout {
                             mouse-cursor: pointer;
                             clicked => {
                                 fullscreen-clicked();
+                            }
+                        }
+                    }
+                    Image {
+                        visible: is-full-screen;
+                        x: root.width - self.width - 18px;
+                        y: 18px;
+                        source: HeroIconsOutline.x-mark;
+                        colorize: Palette.button-secondary-color;
+                        width: 18px;
+                        height: 18px;
+                        close-button := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                close-clicked();
                             }
                         }
                     }
@@ -264,5 +264,11 @@ export component Toolbar inherits VerticalLayout {
         vertical-stretch: 1;
         opacity: 0;
         background: Palette.toolbar-cover;
+        TouchArea {
+            enabled: !should-suppress();
+            clicked => {
+                show(false);
+            }
+        }
     }
 }

@@ -1,0 +1,19 @@
+export struct Character {
+    name: string,
+    subtext: string,
+    last-used: string,
+    send-on-connect: string,
+    send-on-connect-hidden: bool,
+}
+
+export struct Profile {
+    name: string,
+    host: string,
+    port: int,
+    characters: [Character],
+}
+
+export struct UiResult {
+    success: bool,
+    message: string
+}

@@ -6,20 +6,38 @@ import "../assets/fonts/GeistMonoVF.ttf";
 import "../assets/fonts/MonaspaceKryptonVarVF.ttf";
 
 import { Toolbar } from "toolbar.slint";
-import { AutocompleteResult, SessionKeyPressResponse, SessionKeyPressResponseType, SessionState, TerminalSizeHints, SmudgyState, Palette } from "globals.slint";
+import { AutocompleteResult, HeroIconsOutline, SessionKeyPressResponse, SessionKeyPressResponseType, SessionState, TerminalSizeHints, SmudgyState, Palette } from "globals.slint";
 import { TerminalView } from "terminal_view.slint";
 
 export { SessionKeyPressResponse, SessionKeyPressResponseType, SessionState, SmudgyState, TerminalSizeHints }
 
+component RoundButton inherits Rectangle {
+    in property <image> icon <=> image.source;
+    callback clicked <=> touch.clicked;
+    border-radius: 24px;
+    height: 36px;
+    width: 36px;
+    drop-shadow-color: black;
+    drop-shadow-blur: 12px;
+    background: Palette.button-secondary-color.transparentize(50%);
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        image := Image {
+            height: 18px;
+            width: 18px;
+            colorize: white;
+        }
+    }
+}
 
-export component MainWindow inherits Window {    
+export component MainWindow inherits Window {
     icon: @image-url("../assets/icon256.png");
     preferred-width: 800px;
     preferred-height: 600px;
     title: "smudgy";
     in property <[SessionState]> sessions;
     in property <bool> is-full-screen;
-    
+    callback toolbar-close-clicked <=> toolbar.close-clicked;
     callback toolbar-create-session-clicked <=> toolbar.create-session-clicked;
     callback toolbar-fullscreen-clicked <=> toolbar.fullscreen-clicked;
     callback drag-window <=> toolbar.drag-window;
@@ -28,21 +46,24 @@ export component MainWindow inherits Window {
     callback session-accepted(int, string);
     callback session-key-pressed(int, KeyEvent, string) -> SessionKeyPressResponse;
     callback session-scrollbar-value-changed(int, int);
+    callback session-close-clicked(int);
+    callback session-reconnect-clicked(int);
     property <length> editor-font-size: 14px;
-
+    public function set_toolbar_show(show: bool) {
+        toolbar.show(show);
+    }
     public pure function get_physical_terminal_area_dimensions() -> TerminalSizeHints {
         // Height has subtracted:
         // 1 rem for padding inside editor
         // 1 rem for spacing in between editor and terminal area
         // font-size * 1.25 for the editor itself 
-        return { 
+        return {
             terminal-padding: 1rem,
             terminal-spacing: 1rem,
             editor-area-height: (editor-font-size * 1.25) + 1rem,
             terminal-scrollbar-width: 20px,
-         };
+        };
     }
-
     Rectangle {
         background: Palette.background;
         VerticalLayout {
@@ -82,18 +103,69 @@ export component MainWindow inherits Window {
         toolbar := Toolbar {
             num-sessions: sessions.length;
             is-full-screen: is-full-screen;
-        }    
+        }
     }
 
-    // Reconnect and Close Session floating buttons
-    // for session[index] in sessions: Rectangle {
-    //     width: 216px;
-    //     height: 64px;
-    //     x: (index * (root.width / (sessions.length))) + (root.width / (2 * sessions.length)) - self.width / 2;
-    //     y: 192px;
-    //     background: Palette.button-secondary-bg;
-    //     border-radius: self.height * 0.5;
-    //     border-width: 0.5pt;
-    //     border-color: Palette.button-secondary-color;
-    // }
+    //Reconnect and Close Session floating buttons
+    session-buttons := Rectangle {
+        opacity: 0;
+        states [
+            shown when toolbar.should-appear(): {
+                opacity: 1;
+                in {
+                    animate opacity{
+                        duration: 400ms;
+                        easing: ease-in;
+                    }
+                }
+                out {
+                    animate opacity{
+                        duration: 1000ms;
+                        easing: ease-out;
+                    }
+                }
+            }
+        ]
+        if !toolbar.should-suppress(): Rectangle {
+            for session[index] in sessions: Rectangle {
+                height: 64px;
+                width: 124px;
+                drop-shadow-color: black;
+                drop-shadow-blur: 12px;
+                x: (index * (root.width / (sessions.length))) + (root.width / (2 * sessions.length)) - self.width / 2;
+                y: toolbar.should-appear() ? 192px : -64px;
+                animate x {
+                    duration: 100ms;
+                    easing: ease-in-out;
+                }
+                animate y {
+                    duration: 100ms;
+                    easing: ease-in;
+                }
+                background: Palette.button-secondary-bg;
+                border-radius: self.height * 0.5;
+                border-width: 0.5pt;
+                border-color: Palette.button-secondary-color;
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: space-around;
+                        RoundButton {
+                            icon: HeroIconsOutline.x-mark;
+                            clicked => {
+                                session-close-clicked(index);
+                            }
+                        }
+
+                        RoundButton {
+                            icon: HeroIconsOutline.arrow-path;
+                            clicked => {
+                                session-reconnect-clicked(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

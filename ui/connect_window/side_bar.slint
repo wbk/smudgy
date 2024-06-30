@@ -1,7 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: MIT
 
-import { HorizontalBox, VerticalBox, Palette } from "std-widgets.slint";
+import { HorizontalBox, VerticalBox, Palette, Button } from "std-widgets.slint";
+import { Profile } from "./types.slint";
+import { HeroIconsOutline } from "../globals.slint";
 
 component SideBarItem inherits Rectangle {
     in property <bool> selected;
@@ -50,15 +52,21 @@ component SideBarItem inherits Rectangle {
 }
 
 export component SideBar inherits Rectangle {
-    in property <[string]> model: [];
+    in property <[Profile]> profiles;
     in property <string> title <=> label.text;
-    out property <int> current-item: 0;
-    out property <int> current-focused: fs.has-focus ? fs.focused-tab : -1; // The currently focused tab
+    in-out property <int> current-profile-idx: 0;
+    out property <int> current-focused: fs.has-focus ? fs.focused-tab : -1;
+    callback new-profile-clicked <=> new-profile-button.clicked;
+    callback selection-changed;
+    
+    public pure function current-profile() -> Profile {
+        self.profiles[current-profile-idx]
+    }
 
     width: 180px;
     forward-focus: fs;
     accessible-role: tab;
-    accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.current-item;
+    accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.current-profile-idx;
 
     Rectangle {
         background: Palette.background.darker(0.2);
@@ -66,7 +74,7 @@ export component SideBar inherits Rectangle {
         fs := FocusScope {
             key-pressed(event) => {
                 if (event.text == "\n") {
-                     root.current-item = root.current-focused;
+                     root.current-profile-idx = root.current-focused;
                      return accept;
                 }
                 if (event.text == Key.UpArrow) {
@@ -74,7 +82,7 @@ export component SideBar inherits Rectangle {
                      return accept;
                 }
                 if (event.text == Key.DownArrow) {
-                     self.focused-tab = Math.min(self.focused-tab + 1, root.model.length - 1);
+                     self.focused-tab = Math.min(self.focused-tab + 1, root.profiles.length - 1);
                      return accept;
                 }
                 return reject;
@@ -82,7 +90,7 @@ export component SideBar inherits Rectangle {
 
             key-released(event) => {
                 if (event.text == " ") {
-                     root.current-item = root.current-focused;
+                     root.current-profile-idx = root.current-focused;
                      return accept;
                 }
                 return reject;
@@ -108,12 +116,15 @@ export component SideBar inherits Rectangle {
         navigation := VerticalLayout {
             alignment: start;
             vertical-stretch: 0;
-            for item[index] in root.model : SideBarItem {
-                clicked => { root.current-item = index; }
+            for item[index] in root.profiles : SideBarItem {
+                clicked => { 
+                    root.current-profile-idx = index;
+                    selection-changed();
+                }
 
                 has-focus: index == root.current-focused;
-                text: item;
-                selected: index == root.current-item;
+                text: item.name;
+                selected: index == root.current-profile-idx;
             }
         }
 
@@ -124,6 +135,16 @@ export component SideBar inherits Rectangle {
 
                 @children
              }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            new-profile-button := Button {
+                text: "New Profile";
+                primary: true;
+                icon: HeroIconsOutline.plus;
+                colorize-icon: true;    
+            }    
         }
     }
 }

@@ -1,13 +1,16 @@
 #![feature(exact_size_is_empty)]
 #![feature(duration_millis_float)]
+//#![windows_subsystem = "windows"]
 
 use log::{debug, error, info, log_enabled, Level};
 use models::Profile;
+use raw_window_handle::{
+    HasRawDisplayHandle, HasRawWindowHandle, HasWindowHandle, RawWindowHandle,
+};
+use ui::ConnectWindowBuilder;
 
 use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Arc, LazyLock, Mutex, Weak},
+ cell::RefCell, panic, process, rc::Rc, sync::{Arc, LazyLock, Mutex, Weak}
 };
 
 use i_slint_backend_winit::{
@@ -20,7 +23,7 @@ use i_slint_backend_winit::{
 
 use i_slint_core::lengths::LogicalRect;
 use session::Session;
-use slint::{platform::WindowEvent, ComponentHandle, VecModel};
+use slint::{platform::WindowEvent, ComponentHandle, LogicalPosition, VecModel};
 use tokio::runtime::Builder;
 
 #[macro_use]
@@ -36,43 +39,22 @@ pub mod models;
 mod script_runtime;
 pub mod session;
 mod trigger;
+mod ui;
 
 use smudgy_connect_window::ConnectWindow;
 
-
-fn center_window_in_parent(parent: &MainWindow, child: &ConnectWindow)
-{
-    parent.window().with_winit_window(|parent_winit| {
-        child.window().with_winit_window(|child_winit| {
-            let parent_size = parent_winit.inner_size();
-            let parent_position = parent_winit.outer_position().unwrap();
-            let child_size = child_winit.inner_size();
-
-            let new_position = PhysicalPosition::new(
-                parent_position.x + (parent_size.width as i32 - child_size.width as i32) / 2,
-                parent_position.y + (parent_size.height as i32 - child_size.height as i32) / 2,
-            );
-
-            debug!("Centering child window in parent: parent size: {:?}, parent position: {:?}, child size: {:?}, new position: {:?}", parent_size, parent_position, child_size, new_position);
-
-            child_winit.set_outer_position(new_position);
-
-            let _ = child_winit.request_inner_size(child_size);
-        });
-    });
-}
-
 fn main() {
     if let Err(_) = std::env::var("SMUDGY_LOG") {
-        std::env::set_var("SMUDGY_LOG", "debug,smudgy=trace");
+        // This is only unsafe because it isn't thread-safe; no other threads have spawned yet.
+        unsafe { std::env::set_var("SMUDGY_LOG", "debug,smudgy=trace"); }
     }
 
     pretty_env_logger::init_custom_env("SMUDGY_LOG");
 
     info!(
-        "smudgy started; version {} ({}, built on {})", env!("SMUDGY_BUILD_NAME"),
+        "smudgy started; version {} ({}, built on {})",
+        env!("SMUDGY_BUILD_NAME"),
         env!("CARGO_PKG_VERSION"),
-        
         build_time::build_time_local!("%Y-%m-%d %H:%M:%S")
     );
 
@@ -88,13 +70,16 @@ fn main() {
     let platform = Box::new(
         i_slint_backend_winit::Backend::new_with_renderer_by_name(Some("skia-opengl")).unwrap(),
     );
+
     slint::platform::set_platform(platform).unwrap();
 
     let ui: MainWindow = MainWindow::new().unwrap();
-    let connect_window: ConnectWindow = ConnectWindow::new().unwrap();
 
     let sessions: Rc<RefCell<Vec<Arc<Mutex<Session>>>>> = Rc::new(RefCell::new(Vec::new()));
     let sessions_model = Rc::new(VecModel::default());
+
+    let connect_window: ConnectWindow =
+        ConnectWindowBuilder::build(ui.as_weak(), sessions.clone(), sessions_model.clone());
 
     ui.set_sessions(sessions_model.clone().into());
 
@@ -124,42 +109,33 @@ fn main() {
             });
     });
 
-    let ui_sessions = sessions.clone();
-    let ui_sessions_model = sessions_model.clone();
+    ui.on_toolbar_close_clicked(|| {
+        process::exit(0);
+    });
+
     let weak_window = ui.as_weak();
     let ui_connect = connect_window.as_weak();
     ui.on_toolbar_create_session_clicked(move || {
         let connect = ui_connect.upgrade().unwrap();
         let window = weak_window.upgrade().unwrap();
 
+        let connect_size = connect.window().size();
+        let main_pos = window.window().position();
+        let main_size = window.window().size();
+        let connect_pos_phx = slint::PhysicalPosition::new(
+            std::cmp::max(
+                0,
+                main_pos.x + (main_size.width as i32 / 2 - connect_size.width as i32 / 2),
+            ),
+            std::cmp::max(
+                0,
+                main_pos.y + (main_size.height as i32 / 2 - 400),
+            ),
+        );
+
+        connect.window().set_position(connect_pos_phx);
+        connect.invoke_refresh_profiles();
         connect.show().unwrap();
-        debug!("Connect window has size {:?}", connect.window().size());
-        connect.window().dispatch_event(WindowEvent::Resized { size: connect.window().size().to_logical(connect.window().scale_factor()) });
-
-        center_window_in_parent(&window, &connect);
-
-
-        let mut sessions = ui_sessions.borrow_mut();
-        let new_session_id = sessions.len() as i32;
-
-        let session = Arc::new(Mutex::new(Session::new(
-            new_session_id,
-            weak_window.clone(),
-            Profile::new(Some("Arctic")).set_host("mud.arctic.org").set_port(2700).clone()
-        )));
-
-        sessions.push(session.clone());
-
-        let mut session_guard = session.lock().unwrap();
-
-        let ui_session_state = SessionState {
-            name: "Arctic".into(),
-            buffer: session_guard.view().into(),
-            scrollback_size: session_guard.view().row_count_model().into(),
-        };
-        ui_sessions_model.push(ui_session_state);
-
-        session_guard.connect();
     });
 
     let ui_sessions = sessions.clone();
@@ -192,14 +168,12 @@ fn main() {
     );
 
     let ui_sessions = Rc::clone(&sessions);
-    ui.on_session_scrollbar_value_changed(
-        move |session_index, value| {
-            let sessions = ui_sessions.borrow_mut();
-            let to_invoke = sessions[session_index as usize].clone();
-            let mut guard = to_invoke.lock().unwrap();
-            guard.view().set_scroll_position(value);
-        },
-    );
+    ui.on_session_scrollbar_value_changed(move |session_index, value| {
+        let sessions = ui_sessions.borrow_mut();
+        let to_invoke = sessions[session_index as usize].clone();
+        let guard = to_invoke.lock().unwrap();
+        guard.view().set_scroll_position(value);
+    });
 
     let ui_sessions = sessions.clone();
     let weak_window = ui.as_weak();
@@ -208,25 +182,25 @@ fn main() {
         .set_rendering_notifier(move |state, _graphics_api| match state {
             slint::RenderingState::BeforeRendering => {
                 let window = weak_window.upgrade().unwrap();
+
+                if !window.window().is_visible() {
+                    return;
+                }
+
                 let sessions = ui_sessions.borrow();
 
                 if !sessions.is_empty() {
                     let size_hints = window.invoke_get_physical_terminal_area_dimensions();
-                    let ui = weak_window.upgrade().unwrap();
-
                     window.window().with_winit_window(|window| {
                         let window_size = window.inner_size();
 
-                        let terminal_height = window_size.height
-                            - (size_hints.terminal_padding * 2.0
+                        let terminal_height = std::cmp::max(0, window_size.height
+                            - (size_hints.terminal_padding * 3.5
                                 + size_hints.terminal_spacing
                                 + size_hints.editor_area_height)
-                                as u32;
-                        let terminal_width = window_size.width
-                            - (size_hints.terminal_padding * 2.0
-                                + size_hints.terminal_spacing * (sessions.len() as f32)
-                                - size_hints.terminal_spacing) as u32
-                            - size_hints.terminal_scrollbar_width as u32;
+                                as u32);
+                        let terminal_width = (window_size.width
+                            - (size_hints.terminal_padding * 2.0) as u32) / sessions.len() as u32 - size_hints.terminal_spacing as u32 - size_hints.terminal_scrollbar_width as u32;
 
                         for session in sessions.iter() {
                             let session_guard = session.lock().unwrap();
@@ -240,14 +214,32 @@ fn main() {
         })
         .unwrap();
 
+        let ui_sessions = Rc::clone(&sessions);
+        ui.on_refresh_terminal(move |session_index: i32| {
+            let sessions = ui_sessions.borrow();
+            let to_refresh = sessions[session_index as usize].clone();
+            let guard = to_refresh.lock().unwrap();
+            guard.view().handle_incoming_lines();
+        });
+    
+
     let ui_sessions = Rc::clone(&sessions);
-    ui.on_refresh_terminal(move |session_index: i32| {
-        let sessions = ui_sessions.borrow_mut();
-        let to_refresh = sessions[session_index as usize].clone();
-        let guard = to_refresh.lock().unwrap();
-        guard.view().handle_incoming_lines();
+    let ui_sessions_model = Rc::clone(&sessions_model);
+    ui.on_session_close_clicked(move |session_index: i32| {
+        let mut sessions = RefCell::borrow_mut(&ui_sessions);
+        let session = sessions.remove(session_index as usize);
+        session.lock().unwrap().close();
+        ui_sessions_model.remove(session_index as usize);
     });
 
+    let ui_sessions = Rc::clone(&sessions);
+    ui.on_session_reconnect_clicked(move |session_index: i32| {
+        let sessions = ui_sessions.borrow();
+        let session = sessions[session_index as usize].clone();
+        let mut guard = session.lock().unwrap();
+        guard.connect();
+});
+    
     ui.show().unwrap();
     trace!("Starting ui event loop...");
     slint::run_event_loop().unwrap();

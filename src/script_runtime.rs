@@ -1,9 +1,8 @@
 use std::{
-    sync::{Arc, Mutex},
-    thread,
+    borrow::Borrow, sync::{Arc, Mutex}, thread
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 
 use deno_core::{
     v8::{self, script_compiler::Source, Global, Handle},
@@ -20,7 +19,6 @@ use tokio::{
 
 use crate::{
     session::{incoming_line_history::IncomingLineHistory, StyledLine, ViewAction},
-    trigger::InterpretedAction,
     MainWindow,
 };
 
@@ -28,13 +26,14 @@ use crate::{
 pub enum RuntimeAction {
     PassthroughCompleteLine(Arc<StyledLine>),
     PassthroughPartialLine(Arc<StyledLine>),
-    EvalTriggerScripts(Arc<StyledLine>, Arc<Vec<InterpretedAction>>),
-    EvalAliasScripts(Arc<String>, Arc<Vec<InterpretedAction>>, u8),
-    StringLiteralCommand(Arc<String>),
+    EvalJavascriptTrigger(Arc<StyledLine>, usize, Arc<Vec<(String, String)>>, Arc<oneshot::Sender<Option<Arc<String>>>>),
+    EvalJavascriptAlias(Arc<String>, usize, Arc<Vec<(String, String)>>, Arc<oneshot::Sender<Option<Arc<String>>>>),
+    SendRaw(Arc<String>),
     Echo(Arc<String>),
     RequestRepaint,
     UpdateWriteToSocketTx(Option<UnboundedSender<Arc<String>>>),
     CompileJavascriptAlias(Arc<String>, Arc<oneshot::Sender<usize>>),
+    CloseSession,
 }
 
 pub struct ScriptRuntime {
@@ -44,6 +43,7 @@ pub struct ScriptRuntime {
 enum ActionResult {
     RequestRepaint,
     SkipRepaint,
+    CloseSession,
 }
 
 impl ScriptRuntime {
@@ -134,17 +134,16 @@ impl ScriptRuntime {
     fn handle_incoming_action(
         deno: &mut JsRuntime,
         view_line_action_tx: &UnboundedSender<ViewAction>,
-        weak_window: &slint::Weak<MainWindow>,
         incoming_line_history_arc: &Arc<Mutex<IncomingLineHistory>>,
         write_to_socket_tx: &mut Option<UnboundedSender<Arc<String>>>,
         compiled_scripts: &mut Vec<v8::Global<v8::Script>>,
         action: RuntimeAction,
-    ) -> Result<(), anyhow::Error> {
-        let result = match action {
-            RuntimeAction::RequestRepaint => ActionResult::RequestRepaint,
+    ) -> Result<ActionResult, anyhow::Error> {
+        match action {
+            RuntimeAction::RequestRepaint => Ok(ActionResult::RequestRepaint),
             RuntimeAction::Echo(line) => {
-                ScriptRuntime::echo_line(line.as_str(), &view_line_action_tx);
-                ActionResult::RequestRepaint
+                ScriptRuntime::echo_line(line.as_str(), &view_line_action_tx)?;
+                Ok(ActionResult::RequestRepaint)
             }
             RuntimeAction::PassthroughCompleteLine(line) => {
                 view_line_action_tx
@@ -153,7 +152,7 @@ impl ScriptRuntime {
                 let mut incoming_line_history = incoming_line_history_arc.lock().unwrap();
                 incoming_line_history.extend_line(line);
                 incoming_line_history.commit_current_line();
-                ActionResult::SkipRepaint
+                Ok(ActionResult::SkipRepaint)
             }
             RuntimeAction::PassthroughPartialLine(line) => {
                 view_line_action_tx
@@ -161,66 +160,13 @@ impl ScriptRuntime {
                     .unwrap();
                 let mut incoming_line_history = incoming_line_history_arc.lock().unwrap();
                 incoming_line_history.extend_line(line);
-                ActionResult::SkipRepaint
+                Ok(ActionResult::SkipRepaint)
             }
-            RuntimeAction::EvalTriggerScripts(line, triggers) => {
-                view_line_action_tx
-                    .send(ViewAction::AppendCompleteLine(line))
-                    .unwrap();
-
-                for trigger in triggers.iter() {
-                    match trigger {
-                        InterpretedAction::Noop => {}
-                        InterpretedAction::SendRaw(str) => {
-                            for line in str.split('\n') {
-                                ScriptRuntime::send_line_as_command_input(
-                                    line,
-                                    &view_line_action_tx,
-                                    &write_to_socket_tx,
-                                );
-                            }
-                        }
-                        InterpretedAction::ProcessAlias(str) => {
-                            for line in str.split(|ch| ch == ';' || ch == '\n') {
-                                ScriptRuntime::send_line_as_command_input(
-                                    line,
-                                    &view_line_action_tx,
-                                    &write_to_socket_tx,
-                                );
-                            }
-                        }
-                        InterpretedAction::ProcessJavascriptAlias(_script_id, _matches) => {
-                            unimplemented!()
-                        }
-                    }
-                }
-
-                ActionResult::SkipRepaint
+            RuntimeAction::EvalJavascriptTrigger(_, _, _, _) => {
+                unimplemented!();
             }
-            RuntimeAction::EvalAliasScripts(_line, aliases, _depth) => {
-                for alias in aliases.iter() {
-                    match alias {
-                        InterpretedAction::Noop => {}
-                        InterpretedAction::SendRaw(str) => {
-                            for line in str.split('\n') {
-                                ScriptRuntime::send_line_as_command_input(
-                                    line,
-                                    &view_line_action_tx,
-                                    &write_to_socket_tx,
-                                );
-                            }
-                        }
-                        InterpretedAction::ProcessAlias(str) => {
-                            for line in str.split(|ch| ch == ';' || ch == '\n') {
-                                ScriptRuntime::send_line_as_command_input(
-                                    line,
-                                    &view_line_action_tx,
-                                    &write_to_socket_tx,
-                                );
-                            }
-                        }
-                        InterpretedAction::ProcessJavascriptAlias(script_id, matches) => {
-                            if let Some(script) = compiled_scripts.get(*script_id) {
+            RuntimeAction::EvalJavascriptAlias(_line, script_id, matches, reply_tx) => {
+                            if let Some(script) = compiled_scripts.get(script_id) {
                                 let local_scope = &mut deno.handle_scope();
                                 let try_catch = &mut v8::TryCatch::new(local_scope);
 
@@ -250,6 +196,8 @@ impl ScriptRuntime {
                                     let exc = exc.to_string(try_catch).unwrap();
                                     let exc = exc.to_rust_string_lossy(try_catch);
                                     ScriptRuntime::echo_line(exc.as_str(), &view_line_action_tx)?;
+                                    Arc::into_inner(reply_tx).unwrap().send(None).unwrap();
+                                    Ok(ActionResult::RequestRepaint)
                                 } else {
                                     if let Some(value) = result {
                                         if value.boolean_value(try_catch) {
@@ -257,24 +205,23 @@ impl ScriptRuntime {
                                                 .open(try_catch)
                                                 .to_rust_string_lossy(try_catch);
 
-                                            for line in str.split(|ch| ch == ';' || ch == '\n') {
-                                                ScriptRuntime::send_line_as_command_input(
-                                                    line,
-                                                    &view_line_action_tx,
-                                                    &write_to_socket_tx,
-                                                );
+                                                Arc::into_inner(reply_tx).unwrap().send(Some(Arc::new(str))).unwrap();
+                                                Ok(ActionResult::SkipRepaint)
+                                            } else {
+                                                Arc::into_inner(reply_tx).unwrap().send(None).unwrap();
+                                                Ok(ActionResult::SkipRepaint)
                                             }
+                                        } else {
+                                            Arc::into_inner(reply_tx).unwrap().send(None).unwrap();
+                                            Ok(ActionResult::SkipRepaint)
                                         }
                                     }
-                                }
-                            }
-                        }
+                    } else {
+                        bail!("Failed to load alias by script id {script_id}");
                     }
                 }
 
-                ActionResult::RequestRepaint
-            }
-            RuntimeAction::StringLiteralCommand(str) => {
+            RuntimeAction::SendRaw(str) => {
                 for line in str.split(|ch| ch == ';' || ch == '\n') {
                     ScriptRuntime::send_line_as_command_input(
                         line,
@@ -282,11 +229,11 @@ impl ScriptRuntime {
                         &write_to_socket_tx,
                     );
                 }
-                ActionResult::RequestRepaint
+                Ok(ActionResult::RequestRepaint)
             }
             RuntimeAction::UpdateWriteToSocketTx(option_tx) => {
                 *write_to_socket_tx = option_tx;
-                ActionResult::SkipRepaint
+                Ok(ActionResult::SkipRepaint)
             }
             RuntimeAction::CompileJavascriptAlias(source, reply_arc) => {
                 let f =
@@ -299,18 +246,9 @@ impl ScriptRuntime {
                     reply.send(module_id).unwrap();
                 }
 
-                ActionResult::SkipRepaint
+                Ok(ActionResult::SkipRepaint)
             }
-        };
-
-        match result {
-            ActionResult::RequestRepaint => {
-                match weak_window.upgrade_in_event_loop(move |handle| handle.window().request_redraw()) {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err(anyhow::anyhow!("Failed to request redraw")),
-                }
-            }
-            ActionResult::SkipRepaint => Ok(()),
+            RuntimeAction::CloseSession => Ok(ActionResult::CloseSession),
         }
     }
 
@@ -346,17 +284,23 @@ impl ScriptRuntime {
                     match ScriptRuntime::handle_incoming_action(
                     &mut deno,
                     &view_line_action_tx,
-                    &weak_window,
                     &incoming_line_history_arc,
                     &mut write_to_socket_tx,
                     &mut compiled_scripts,
                     action,
                 ) {
+                    Ok(ActionResult::RequestRepaint) => {
+                        weak_window.upgrade_in_event_loop(move |handle| handle.window().request_redraw()).expect("Failed to request redraw");
+                    }
+                    Ok(ActionResult::SkipRepaint) => {}
+                    Ok(ActionResult::CloseSession) => {
+                        trace!("Session runtime event loop ending");
+                        break;
+                    }
                     Err(err) => {
                         warn!("Error in script runtime: {:?}, ending", err);
                         break;
                     }
-                    _ => {}
                      }
                 }
             }
