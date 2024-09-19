@@ -129,7 +129,7 @@ impl ConnectWindowBuilder {
 }
 
 
-fn on_save_character(_profile: Profile, character: Character) -> UiResult {
+fn on_save_character(_profile: Profile, _character: Character) -> UiResult {
     UiResult {
         success: false,
         message: "unimplemented".into(),

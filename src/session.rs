@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    num::{NonZeroU32},
+    num::NonZeroU32,
     rc::Rc,
     sync::{Arc, Mutex},
 };

@@ -52,15 +52,13 @@ impl IncomingLineHistory {
         skip_words_in: Option<&HashSet<String>>,
         n_recent_lines: usize,
     ) -> Option<String> {
-        let regex = Regex::new(r"\b").unwrap();
-        let rr = &regex;
         let lowercase_prefix = prefix.to_lowercase();
         let found = self
             .lines
             .iter()
             .rev()
             .take(n_recent_lines)
-            .flat_map(|line| line.as_str().split(rr))
+            .flat_map(|line| line.as_str().split_whitespace())
             .find_map(|str| {
                 if let Some(history) = skip_words_in {
                     if history.contains(str) {

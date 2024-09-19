@@ -12,7 +12,7 @@ pub enum HotkeyResult {
 impl From<Option<&dyn ExactSizeIterator<Item = &Hotkey>>> for HotkeyResult {
     fn from(value: Option<&dyn ExactSizeIterator<Item = &Hotkey>>) -> Self {
         match value {
-            Some(value) if !value.is_empty() => HotkeyResult::Processed,
+            Some(value) if !(value.len() == 0) => HotkeyResult::Processed,
             _ => HotkeyResult::Unrecognized,
         }
     }
