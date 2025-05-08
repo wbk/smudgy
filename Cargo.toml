@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "ui",
+    "core",
+]
+resolver = "2"
+
+# Define shared dependencies for the workspace
+[workspace.dependencies]
+anyhow = "1.0.98"
+iced = { version = "0.13.1", features = ["tokio", "svg", "debug", "advanced"] }
+dirs = "6.0.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+validator = { version = "0.20.0", features = ["derive"] }
+cfg-if = "1.0.0"
+regex = "1"
+hyperscan = "0.3.2"
+smudgy_core = { path = "./core" }
+tokio = { version = "1.44.2", features = ["full"] }
+pretty_env_logger = "0.5.0"
+log = { version = "0.4.27", features = ["max_level_info"] }
+
+# Define workspace-wide lints
+[workspace.lints.clippy]
+pedantic = "warn"
