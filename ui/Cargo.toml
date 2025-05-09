@@ -12,6 +12,7 @@ log = { workspace = true }
 
 validator.workspace = true
 tokio.workspace = true
+tokio-stream = "0.1.17"
 
 [build-dependencies]
 winresource = "0.1.17"

@@ -6,7 +6,9 @@ edition = "2024"
 [dependencies]
 # Inherit versions from workspace where possible
 anyhow = { workspace = true }
+derive_more = { workspace = true }
 dirs = { workspace = true }
+iced = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 validator = { workspace = true }
@@ -16,13 +18,13 @@ pretty_env_logger = { workspace = true }
 regex = { workspace = true, optional = true }
 hyperscan = { workspace = true, optional = true }
 log = { workspace = true }
-vtparse = "0.7.0"
-deno_core = { version = "0.340.0", features = ["unsafe_use_unprotected_platform"] }
-rustyscript = { git = "https://github.com/rscarson/rustyscript", branch = "master", features = ["broadcast_channel", "cache", "console", "crypto", "ffi", "fs", "http", "kv", "url", "io", "web", "websocket", "webstorage", "fs_import", "url_import", "node_experimental"] }
-deno_media_type = "=0.2.6"
-winapi = {version = "0.3.9", features = ["sysinfoapi"] }
-deno_error = "=0.5.5"
-build-time = "0.1.3"
+rustyscript = { workspace = true }
+vtparse = { workspace = true }
+deno_core = { workspace = true }
+build-time = { workspace = true }
+winapi = { workspace = true }
+chrono = { workspace = true }
+simplelog = "0.12.2"
 
 [features]
 default = ["regex-backend-regex"] # Default to the standard regex crate

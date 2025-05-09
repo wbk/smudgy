@@ -2,27 +2,34 @@ use super::connection::vt_processor;
 
 pub use vt_processor::Color;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Style {
     pub fg: vt_processor::Color,
     pub bg: vt_processor::Color,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VtSpan {
     pub style: Style,
     pub begin_pos: usize,
     pub end_pos: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct StyledLine {
     pub text: String,
     pub spans: Vec<VtSpan>,
     raw: Option<String>,
 }
 
+impl PartialEq for StyledLine {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
 impl StyledLine {
+    #[must_use]
     pub fn new(text: &str, span_info: Vec<VtSpan>) -> Self {
         Self {
             text: String::from(text),
@@ -31,6 +38,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn new_with_raw(text: &str, span_info: Vec<VtSpan>, raw: &[u8]) -> Self {
         Self {
             text: String::from(text),
@@ -39,6 +47,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn append(&self, other_line: &StyledLine) -> Self {
         Self {
             text: format!("{}{}", self.text, other_line.text),
@@ -57,7 +66,7 @@ impl StyledLine {
                     let mut combined = raw.clone();
                     match other_line.raw {
                         Some(ref other_raw) => {
-                            combined.push_str(&other_raw);
+                            combined.push_str(other_raw);
                             Some(combined)
                         }
                         None => Some(combined),
@@ -68,6 +77,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn from_echo_str(text: &str) -> Self {
         Self {
             spans: vec![VtSpan {
@@ -75,7 +85,7 @@ impl StyledLine {
                 end_pos: text.len(),
                 style: Style {
                     fg: { Color::Echo },
-                    bg: { Color::DefaultBackground }
+                    bg: { Color::DefaultBackground },
                 },
             }],
             text: String::from(text),
@@ -83,6 +93,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn from_warn_str(text: &str) -> Self {
         Self {
             spans: vec![VtSpan {
@@ -90,7 +101,7 @@ impl StyledLine {
                 end_pos: text.len(),
                 style: Style {
                     fg: { Color::Warn },
-                    bg: { Color::DefaultBackground }
+                    bg: { Color::DefaultBackground },
                 },
             }],
             text: String::from(text),
@@ -98,6 +109,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn from_output_str(text: &str) -> Self {
         Self {
             spans: vec![VtSpan {
@@ -105,7 +117,7 @@ impl StyledLine {
                 end_pos: text.len(),
                 style: Style {
                     fg: { Color::Output },
-                    bg: { Color::DefaultBackground }
+                    bg: { Color::DefaultBackground },
                 },
             }],
             text: String::from(text),
@@ -113,6 +125,7 @@ impl StyledLine {
         }
     }
 
+    #[must_use]
     pub fn raw(&self) -> Option<&str> {
         self.raw.as_deref()
     }
@@ -121,7 +134,7 @@ impl StyledLine {
 impl std::ops::Deref for StyledLine {
     type Target = str;
 
-    #[inline(always)]
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.text.as_str()
     }

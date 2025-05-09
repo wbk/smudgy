@@ -1,17 +1,15 @@
-use serde::{Deserialize, Serialize};
 use crate::get_smudgy_home;
-use anyhow::{Context, Result};
-use std::{collections::HashMap, fs, io, path::PathBuf};
 use crate::models::packages::PackageTree;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fs, io, path::PathBuf};
+
+use super::ScriptLang;
 
 /// Helper function for serde to default boolean fields to true.
 fn default_true() -> bool {
     true
 }
-
-/// Represents the programming language of a script.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptLang { JS, TS }
 
 /// Represents the definition of a single alias.
 ///
@@ -33,6 +31,9 @@ pub struct AliasDefinition {
     /// AND all its parent packages are also enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// The language of the script. Defaults to Plaintext.
+    #[serde(default)]
+    pub language: ScriptLang,
 }
 
 impl AliasDefinition {
@@ -49,7 +50,8 @@ impl AliasDefinition {
     /// # Returns
     ///
     /// `true` if the alias should be considered active, `false` otherwise.
-    #[must_use] pub fn is_effectively_enabled(&self, package_tree: &PackageTree) -> bool {
+    #[must_use]
+    pub fn is_effectively_enabled(&self, package_tree: &PackageTree) -> bool {
         if !self.enabled {
             return false; // Explicitly disabled
         }
@@ -76,7 +78,11 @@ impl AliasDefinition {
     /// `Ok(Some((content, language)))` if a script is found.
     /// `Ok(None)` if no inline script and no corresponding file exists.
     /// `Err(...)` if there's an error accessing files or directories.
-    pub fn get_script_content(&self, alias_name: &str, server_name: &str) -> Result<Option<(String, ScriptLang)>> {
+    pub fn get_script_content(
+        &self,
+        alias_name: &str,
+        server_name: &str,
+    ) -> Result<Option<(String, ScriptLang)>> {
         // 1. Check for inline script
         if let Some(inline_content) = &self.script {
             // TODO: Determine language of inline scripts. Assume JS for now.
@@ -86,16 +92,17 @@ impl AliasDefinition {
         }
 
         // 2. No inline script, look for files
-        let base_path = get_smudgy_home()?
-            .join(server_name)
-            .join("aliases"); // Base aliases directory
+        let base_path = get_smudgy_home()?.join(server_name).join("aliases"); // Base aliases directory
 
         // Check for .ts file
         let ts_path = base_path.join(format!("{alias_name}.ts"));
         if ts_path.exists() {
             match fs::read_to_string(&ts_path) {
                 Ok(content) => return Ok(Some((content, ScriptLang::TS))),
-                Err(e) => return Err(anyhow::Error::from(e).context(format!("Failed to read script file: {ts_path:?}"))),
+                Err(e) => {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("Failed to read script file: {ts_path:?}")));
+                }
             }
         }
 
@@ -104,7 +111,10 @@ impl AliasDefinition {
         if js_path.exists() {
             match fs::read_to_string(&js_path) {
                 Ok(content) => return Ok(Some((content, ScriptLang::JS))),
-                Err(e) => return Err(anyhow::Error::from(e).context(format!("Failed to read script file: {js_path:?}"))),
+                Err(e) => {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("Failed to read script file: {js_path:?}")));
+                }
             }
         }
 
@@ -123,12 +133,18 @@ impl AliasDefinition {
     ///
     /// # Errors
     /// Returns an error if the smudgy home directory cannot be determined.
-    pub fn get_expected_script_path(&self, alias_name: &str, server_name: &str, lang: ScriptLang) -> Result<PathBuf> {
-         let ext = match lang {
-             ScriptLang::JS => "js",
-             ScriptLang::TS => "ts",
-         };
-         Ok(get_smudgy_home()?
+    pub fn get_expected_script_path(
+        &self,
+        alias_name: &str,
+        server_name: &str,
+        lang: ScriptLang,
+    ) -> Result<PathBuf> {
+        let ext = match lang {
+            ScriptLang::JS => "js",
+            ScriptLang::TS => "ts",
+            ScriptLang::Plaintext => "txt",
+        };
+        Ok(get_smudgy_home()?
             .join(server_name)
             .join("aliases")
             .join(format!("{alias_name}.{ext}")))
@@ -151,22 +167,15 @@ pub fn load_aliases(server_name: &str) -> Result<HashMap<String, AliasDefinition
                 ))?;
             Ok(aliases)
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            Ok(HashMap::new())
-        }
-        Err(e) => {
-            Err(e).context(format!(
-                "Failed to read aliases.json for server '{server_name}'"
-            ))
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(e).context(format!(
+            "Failed to read aliases.json for server '{server_name}'"
+        )),
     }
 }
 
 /// Saves the alias definitions map to `aliases.json` for a given server.
-pub fn save_aliases(
-    server_name: &str,
-    aliases: &HashMap<String, AliasDefinition>,
-) -> Result<()> {
+pub fn save_aliases(server_name: &str, aliases: &HashMap<String, AliasDefinition>) -> Result<()> {
     let smudgy_dir = get_smudgy_home()?;
     let aliases_dir = smudgy_dir.join(server_name).join("aliases");
 

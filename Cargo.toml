@@ -1,15 +1,25 @@
 [workspace]
-members = [
-    "ui",
-    "core",
-]
+members = ["ui", "core"]
 resolver = "2"
 
 # Define shared dependencies for the workspace
 [workspace.dependencies]
 anyhow = "1.0.98"
-iced = { version = "0.13.1", features = ["tokio", "svg", "debug", "advanced"] }
+iced = { git = "https://github.com/wbk/iced", rev = "983aafb24b7b5bfa95eab1efc38e9eb928137b27", features = [
+    "tokio",
+    "svg",
+    "web-colors",
+    "highlighter",
+    "advanced",
+] }
+derive_more = { version = "2.0.1", features = [
+    "display",
+    "from",
+    "into",
+    "add",
+] }
 dirs = "6.0.0"
+chrono = "0.4.41"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 validator = { version = "0.20.0", features = ["derive"] }
@@ -20,7 +30,35 @@ smudgy_core = { path = "./core" }
 tokio = { version = "1.44.2", features = ["full"] }
 pretty_env_logger = "0.5.0"
 log = { version = "0.4.27", features = ["max_level_info"] }
+vtparse = "0.7.0"
+deno_core = { version = "^0.347.0", features = [
+    "unsafe_use_unprotected_platform",
+] }
+rustyscript = { git = "https://github.com/wbk/rustyscript", branch = "master", features = [
+    "broadcast_channel",
+    "cache",
+    "console",
+    "crypto",
+    "ffi",
+    "fs",
+    "http",
+    "kv",
+    "url",
+    "io",
+    "web",
+    "websocket",
+    "webstorage",
+    "fs_import",
+    "url_import",
+    "node_experimental",
+] }
+winapi = { version = "0.3.9", features = ["sysinfoapi"] }
+build-time = "0.1.3"
 
 # Define workspace-wide lints
 [workspace.lints.clippy]
 pedantic = "warn"
+
+[profile.profiling]
+inherits = "release"
+debug = true

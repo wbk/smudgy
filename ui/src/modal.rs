@@ -2,8 +2,14 @@
 pub use self::connect::Event as ConnectEvent;
 pub use self::connect::Message as ConnectMessage;
 
-use iced::{Element, Task};
+use iced::Length;
+use iced::Task;
+use iced::widget::row;
+use iced::widget::text;
+use iced::widget::{column, container};
 
+use crate::theme;
+use crate::theme::Element;
 // Import modal implementation modules
 pub mod connect;
 
@@ -11,9 +17,6 @@ pub mod connect;
 #[derive(Debug)] // Add Clone if state needs to be cloned
 pub enum Modal {
     Connect(connect::State),
-    // Add other modal types here later, e.g.:
-    // Settings(settings::State),
-    // Error(String),
 }
 
 /// Messages that can be sent to the active modal.
@@ -42,22 +45,33 @@ impl Modal {
                 let (task, event) = connect::update(state, msg);
                 // Map the task's message type and the event type
                 (task.map(Message::Connect), event.map(Event::Connect))
-            }
-            // TODO: Add matches for other Modal/Message combinations
-            // _ => (Task::none(), None), // Ignore mismatched messages
+            } // TODO: Add matches for other Modal/Message combinations
+              // _ => (Task::none(), None), // Ignore mismatched messages
         }
     }
 
     /// Get the view for the active modal.
     pub fn view(&self) -> Element<Message> {
-        match self {
-            Modal::Connect(state) => {
-                // Get the view from the specific modal module
-                // and map its message type to our top-level modal Message.
-                connect::view(state).map(Message::Connect)
-            }
-            // TODO: Add view logic for other modal types
-        }
+        let inner = match self {
+            Modal::Connect(state) => connect::view(state).map(Message::Connect),
+        };
+
+        let title_bar_text = text("Connect to server...")
+            .center()
+            .width(Length::Fill)
+            .height(Length::Fixed(34.0));
+
+        container(column![
+            container(row![title_bar_text])
+                .style(theme::builtins::container::modal_title_bar)
+                .width(Length::Fill)
+                .height(Length::Fixed(34.0)),
+            container(inner).style(theme::builtins::container::modal_body),
+        ])
+        .width(Length::Fixed(800.0))
+        .height(Length::Fixed(600.0))
+        .style(theme::builtins::container::modal_container)
+        .into()
     }
 
     /// Perform initial loading task when a modal is first shown (optional).
@@ -65,14 +79,13 @@ impl Modal {
     pub fn initial_task(&self) -> Task<Message> {
         match self {
             Modal::Connect(_) => {
-                 // Trigger the initial server load for the connect modal
-                 Task::perform(
+                // Trigger the initial server load for the connect modal
+                Task::perform(
                     connect::load_servers_async(), // Assuming this helper exists
-                    |result| Message::Connect(ConnectMessage::ServersLoaded(result))
+                    |result| Message::Connect(ConnectMessage::ServersLoaded(result)),
                 )
-            }
-            // Other modals might have different initial tasks or none
-            // _ => Task::none(),
+            } // Other modals might have different initial tasks or none
+              // _ => Task::none(),
         }
     }
-} 
+}

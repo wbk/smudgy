@@ -1,122 +1,151 @@
+use anyhow::{Result, bail};
+use rustyscript::extensions::deno_cron::local;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::ops::Add;
+use std::rc::Rc;
+use std::thread::JoinHandle;
+use std::time::SystemTime;
 use std::{
-    cell::RefCell, collections::{HashMap, HashSet}, fs::{self, File}, io::BufReader, path::{Path, PathBuf}, rc::Rc, str::FromStr, sync::{self, Arc, Mutex, RwLock}, task::Poll, thread, time::Instant
+    sync::{Arc, Mutex},
+    task::Poll,
+    thread::{self},
+    time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
-
-use deno_core::{
-    ascii_str_include, url::Url, v8::{self, script_compiler::Source, CreateParams, Global, Handle}, JsRuntime, PollEventLoopOptions
-};
-
-use rustyscript::{extensions::deno_fs::FileSystem, ExtensionOptions, Runtime as RustyRuntime, RustyResolver};
-
-use serde::Deserialize;
+use deno_core::v8::{self, Global, Handle, script_compiler::Source};
 
 use tokio::{
     select,
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
 };
 
-use crate::{
-    get_smudgy_home, session::{incoming_line_history::IncomingLineHistory}
-};
-
 mod trigger;
-use trigger::{Manager, PushTriggerParams};
+use trigger::Manager;
+mod script_action;
+mod script_engine;
 
-use super::styled_line::StyledLine;
+pub use script_action::ScriptAction;
+use script_engine::{FunctionId, ScriptEngine, ScriptEngineParams, ScriptId};
 
-pub enum UiAction {
-    AppendCompleteLine(Arc<StyledLine>),
-    AppendPartialLine(Arc<StyledLine>),
-}
+use crate::get_smudgy_home;
+use crate::models::ScriptLang;
+use crate::models::aliases::AliasDefinition;
+use crate::models::hotkeys::HotkeyDefinition;
+use crate::models::triggers::TriggerDefinition;
+use crate::session::runtime::trigger::PushTriggerParams;
+use crate::session::{HotkeyId, registry};
 
+use super::{SessionId, TaggedSessionEvent, connection::Connection, styled_line::StyledLine};
+
+use super::{BufferUpdate, SessionEvent};
+use iced::futures::{SinkExt, channel::mpsc::Sender};
 #[derive(Clone, Debug)]
 pub enum RuntimeAction {
+    Connect {
+        host: Arc<String>,
+        port: u16,
+        send_on_connect: Option<Arc<String>>,
+    },
     HandleIncomingLine(Arc<StyledLine>),
     HandleIncomingPartialLine(Arc<StyledLine>),
-    PassthroughCompleteLine(Arc<StyledLine>),
-    PassthroughPartialLine(Arc<StyledLine>),
+    AddCompleteLineToBuffer(Arc<StyledLine>),
+    AddPartialLineToBuffer(Arc<StyledLine>),
     Send(Arc<String>),
     SendRaw(Arc<String>),
     Echo(Arc<String>),
+    EvalJavascript {
+        id: ScriptId,
+        matches: Arc<Vec<(String, String)>>,
+        depth: u32,
+    },
+    CallJavascriptFunction {
+        id: FunctionId,
+        matches: Arc<Vec<(String, String)>>,
+        depth: u32,
+    },
+    AddHotkey {
+        name: Arc<String>,
+        hotkey: HotkeyDefinition,
+    },
+    AddAlias {
+        name: Arc<String>,
+        alias: AliasDefinition,
+    },
+    AddJavascriptFunctionAlias {
+        name: Arc<String>,
+        patterns: Arc<Vec<String>>,
+        function_id: FunctionId,
+    },
+    AddTrigger {
+        name: Arc<String>,
+        trigger: TriggerDefinition,
+    },
+    AddJavascriptFunctionTrigger {
+        name: Arc<String>,
+        patterns: Arc<Vec<String>>,
+        raw_patterns: Arc<Vec<String>>,
+        anti_patterns: Arc<Vec<String>>,
+        function_id: FunctionId,
+        prompt: bool,
+        enabled: bool,
+    },
+    EnableAlias(Arc<String>, bool),
+    EnableTrigger(Arc<String>, bool),
+    ExecHotkey {
+        id: HotkeyId,
+    },
     RequestRepaint,
-    UpdateWriteToSocketTx(Option<UnboundedSender<Arc<String>>>),
+    Connected,
     Reload,
+    Shutdown,
+    Noop,
 }
 
 pub struct Runtime {
-    tx: UnboundedSender<RuntimeAction>,
+    pub session_id: SessionId,
+    pub server_name: Arc<String>,
+    pub profile_name: Arc<String>,
+    pub profile_subtext: Arc<String>,
+    pub ui_tx: Sender<TaggedSessionEvent>,
+    pub tx: UnboundedSender<RuntimeAction>,
+    pub oob_tx: UnboundedSender<RuntimeAction>,
 }
 
 enum ActionResult {
-    RequestRepaint,
-    SkipRepaint,
+    None,
     Echo(String),
+    Reload,
     CloseSession,
 }
 
-macro_rules! trigger_patterns {
-    ($name:ident, $singular:literal, $plural:literal) => {
-        #[derive(Deserialize)]
-        enum $name {
-            #[serde(rename = $singular)]
-            Single(String),
-
-            #[serde(rename = $plural)]
-            Multiple(Vec<String>),
-        }
-
-        impl From<$name> for Vec<String> {
-            fn from(patterns: $name) -> Self {
-                match patterns {
-                    $name::Single(pattern) => vec![pattern],
-                    $name::Multiple(patterns) => patterns,
-                }
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                $name::Multiple(vec![])
-            }
-        }
-    };
+enum RunAction {
+    None,
+    Reload
 }
 
-trigger_patterns!(TriggerPatterns, "pattern", "patterns");
-trigger_patterns!(TriggerRawPatterns, "rawPattern", "rawPatterns");
-trigger_patterns!(TriggerAntiPatterns, "antiPattern", "antiPatterns");
+static RUNTIME_THREADS: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AliasManifest {
-    #[serde(flatten)]
-    patterns: TriggerPatterns,
-    script: Option<String>,
+pub fn join_runtime_threads() {
+    let mut runtime_threads = RUNTIME_THREADS.lock().unwrap();
+    while let Some(join_handle) = runtime_threads.pop() {
+        join_handle.join().unwrap();
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TriggerManifest {
-    #[serde(flatten)]
-    patterns: Option<TriggerPatterns>,
-    #[serde(flatten)]
-    raw_patterns: Option<TriggerRawPatterns>,
-    #[serde(flatten)]
-    anti_patterns: Option<TriggerAntiPatterns>,
-    script: Option<String>,
-    prompt: Option<bool>,
-    enabled: Option<bool>,
-}
+type SentSessionEvent<'a> =
+    iced::futures::sink::Send<'a, Sender<TaggedSessionEvent>, TaggedSessionEvent>;
 
 impl Runtime {
     pub fn new(
-        id: Arc<Mutex<i32>>,
-        view_line_action_tx: UnboundedSender<UiAction>,
+        session_id: SessionId,
         server_name: Arc<String>,
-        incoming_line_history: Arc<Mutex<IncomingLineHistory>>,
-    ) -> Arc<Self> {
+        profile_name: Arc<String>,
+        profile_subtext: Arc<String>,
+        ui_tx: Sender<TaggedSessionEvent>,
+    ) -> Self {
         let (session_runtime_tx, session_runtime_rx) =
             tokio::sync::mpsc::unbounded_channel::<RuntimeAction>();
 
@@ -124,707 +153,605 @@ impl Runtime {
             tokio::sync::mpsc::unbounded_channel::<RuntimeAction>();
 
         let local_session_runtime_tx = session_runtime_tx.clone();
+        let local_session_runtime_oob_tx = session_runtime_oob_tx.clone();
+
         let local_server_name = server_name.clone();
-        thread::spawn(move || {
-           
-            let script_functions: Rc<RefCell<Vec<v8::Global<v8::Function>>>> =
-                Rc::new(RefCell::new(Vec::new()));
-            let mut compiled_scripts: Vec<v8::Global<v8::Script>> = Vec::new();
+        let local_profile_name = profile_name.clone();
+        let local_ui_tx = ui_tx.clone();
 
-            let (rustyscript, trigger_manager) = Runtime::load_scripts(
-                &id,
-                &script_functions,
-                &mut compiled_scripts,
-                &session_runtime_oob_tx,
-                server_name
-            );
+        let thread = thread::spawn(move || {
+            let script_engine = ScriptEngine::new(ScriptEngineParams {
+                session_id,
+                server_name: &local_server_name,
+                profile_name: &local_profile_name,
+                ui_tx: local_ui_tx.clone(),
+                runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+            });
 
-            let runtime = tokio::runtime::Builder::new_current_thread()
-            .build().expect("Failed to create tokio runtime");
+            let trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
 
-            runtime.block_on(Runtime::run_event_loop(
-                id,
-                local_server_name,
-                rustyscript,
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime");
+
+            let mut inner = Inner {
+                log_file: None,
+                session_id: session_id,
                 trigger_manager,
+                hotkeys: BTreeMap::new(),
+                next_hotkey_id: HotkeyId(0),
+                script_engine,
+                server_name: &local_server_name,
+                profile_name: &local_profile_name,
                 session_runtime_rx,
                 session_runtime_oob_rx,
-                local_session_runtime_tx,
-                session_runtime_oob_tx,
-                view_line_action_tx,
-                incoming_line_history,
-                compiled_scripts,
-                script_functions,
-            ));
+                session_runtime_tx: local_session_runtime_tx.clone(),
+                session_runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+                ui_tx: local_ui_tx.clone(),
+                connection: None,
+                pending_buffer_updates: Vec::new(),
+            };
+
+            while let RunAction::Reload = runtime.block_on(inner.run()) {
+                info!("Reloading session runtime...");
+                
+                // Extract the receivers and connection from the old inner before dropping it
+                let old_connection = inner.connection.take();
+                let old_session_runtime_rx = std::mem::replace(&mut inner.session_runtime_rx, {
+                    // Create a dummy receiver that will be immediately replaced
+                    let (_, rx) = tokio::sync::mpsc::unbounded_channel();
+                    rx
+                });
+                let old_session_runtime_oob_rx = std::mem::replace(&mut inner.session_runtime_oob_rx, {
+                    // Create a dummy receiver that will be immediately replaced  
+                    let (_, rx) = tokio::sync::mpsc::unbounded_channel();
+                    rx
+                });
+                
+                
+                drop(inner);
+                
+                // Create completely new Inner struct with fresh ScriptEngine and TriggerManager
+                // This avoids any V8 isolate replacement issues
+                let new_script_engine = ScriptEngine::new(ScriptEngineParams {
+                    session_id,
+                    server_name: &local_server_name,
+                    profile_name: &local_profile_name,
+                    ui_tx: local_ui_tx.clone(),
+                    runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+                });
+
+                let new_trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
+
+                // Replace with the new inner struct
+                inner = Inner {
+                    log_file: None, // Will restart logging
+                    session_id: session_id,
+                    trigger_manager: new_trigger_manager,
+                    hotkeys: BTreeMap::new(), // Reset hotkeys - they'll be re-registered by modules
+                    next_hotkey_id: HotkeyId(0),
+                    script_engine: new_script_engine,
+                    server_name: &local_server_name,
+                    profile_name: &local_profile_name,
+                    session_runtime_rx: old_session_runtime_rx,
+                    session_runtime_oob_rx: old_session_runtime_oob_rx,
+                    session_runtime_tx: local_session_runtime_tx.clone(),
+                    session_runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+                    ui_tx: local_ui_tx.clone(),
+                    connection: old_connection, // Preserve the connection
+                    pending_buffer_updates: Vec::new(),
+                };
+                
+                info!("Session runtime reloaded successfully");
+            }
+
+            registry::unregister_session(session_id);
+
+            drop(inner);
         });
 
-        Arc::new(Self { tx: session_runtime_tx })
-    }
+        RUNTIME_THREADS.lock().unwrap().push(thread);
 
-    pub fn load_scripts(
-        id: &Arc<Mutex<i32>>,
-        script_functions: &Rc<RefCell<Vec<v8::Global<v8::Function>>>>,
-        compiled_scripts: &mut Vec<v8::Global<v8::Script>>,
-        session_runtime_oob_tx: &UnboundedSender<RuntimeAction>,
-        server_name: Arc<String>,
-    ) -> (RustyRuntime, Manager) {
-        script_functions.borrow_mut().clear();
-        compiled_scripts.clear();
-
-        
-    let smudgy_dir = get_smudgy_home().unwrap();
-    let server_path = smudgy_dir.join(server_name.as_str());
-
-        let mut rustyscript = rustyscript::Runtime::with_tokio_runtime_handle(rustyscript::RuntimeOptions {
-            // extensions: vec![
-            //     ops::smudgy_session_ops::init_ops(
-            //         id.clone(),
-            //         weak_sessions.clone(),
-            //         script_functions.clone(),
-            //         session_runtime_oob_tx.clone(),
-            //     )
-            // ],
-            extension_options: ExtensionOptions {                 
-                webstorage_origin_storage_dir: Some(server_path.join("localstorage")),
-                node_resolver: Arc::new(RustyResolver::new(Some(server_path.to_path_buf()), Arc::new(rustyscript::extensions::deno_fs::RealFs))),
-                
-                ..Default::default()
-            },            
-            schema_whlist: HashSet::from(["smudgy".to_string()]),
-            ..Default::default()
-        }, tokio::runtime::Handle::current()).expect("Failed to create JS runtime");
-
-        rustyscript.deno_runtime().execute_script("<smudgy>", ascii_str_include!("runtime/js/smudgy.js"))
-            .unwrap();
-
-        let trigger_manager = Manager::new(session_runtime_oob_tx.clone());
-        (rustyscript, trigger_manager)
-    }
-
-    #[inline(always)]
-    pub fn send(&self, action: RuntimeAction) -> Result<()> {
-        self.tx
-            .send(action)
-            .context("Failed to send action to session runtime")
+        Self {
+            session_id,
+            server_name,
+            profile_name,
+            profile_subtext,
+            ui_tx,
+            tx: session_runtime_tx,
+            oob_tx: session_runtime_oob_tx,
+        }
     }
 
     pub fn tx(&self) -> UnboundedSender<RuntimeAction> {
         self.tx.clone()
     }
+}
 
-    #[inline(always)]
-    fn send_line_as_command_input(
+struct Inner<'a> {
+    session_id: SessionId,
+    trigger_manager: trigger::Manager,
+    script_engine: ScriptEngine<'a>,
+    server_name: &'a Arc<String>,
+    profile_name: &'a Arc<String>,
+    session_runtime_rx: UnboundedReceiver<RuntimeAction>,
+    session_runtime_oob_rx: UnboundedReceiver<RuntimeAction>,
+    session_runtime_tx: UnboundedSender<RuntimeAction>,
+    session_runtime_oob_tx: UnboundedSender<RuntimeAction>,
+    ui_tx: Sender<TaggedSessionEvent>,
+    connection: Option<Connection>,
+    pending_buffer_updates: Vec<BufferUpdate>,
+    hotkeys: BTreeMap<HotkeyId, ScriptAction>,
+    next_hotkey_id: HotkeyId,
+    log_file: Option<BufWriter<File>>,
+}
+
+impl<'a> Inner<'a> {
+    fn echo_warn_str<'s>(
+        &'s mut self,
         line: &str,
-        view_line_action_tx: &UnboundedSender<UiAction>,
-        write_to_socket_tx: &Option<UnboundedSender<Arc<String>>>,
-    ) {
-        let styled_line = Arc::new(StyledLine::from_output_str(line));
+    ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
+        let styled_line = Arc::new(StyledLine::from_warn_str(line));
 
-        // Copy the line into a string with \r\n appended
-        let mut socket_str = String::with_capacity(styled_line.len() + 2);
-        socket_str.push_str(&styled_line);
+        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+        self.pending_buffer_updates
+            .push(BufferUpdate::Append(styled_line));
+        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+
+        Ok(self.flush_buffer_updates()?)
+    }
+
+    fn echo_str<'s>(
+        &'s mut self,
+        line: &str,
+    ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
+        let styled_line = Arc::new(StyledLine::from_echo_str(line));
+
+        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+        self.pending_buffer_updates
+            .push(BufferUpdate::Append(styled_line));
+        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+
+        Ok(self.flush_buffer_updates()?)
+    }
+
+    fn send<'s>(&'s mut self, line: &str) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
+        let mut socket_str = String::with_capacity(line.len() + 2);
+        socket_str.push_str(line);
         socket_str.push_str("\r\n");
         let arc_socket_str = Arc::new(socket_str);
 
-        if let Some(tx) = write_to_socket_tx.as_ref() {
-            tx.send(arc_socket_str).unwrap();
+        let styled_line = Arc::new(StyledLine::from_output_str(line));
+
+        self.pending_buffer_updates
+            .push(BufferUpdate::Append(styled_line));
+        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+
+        if let Some(ref connection) = self.connection {
+            if let Err(e) = connection.write(arc_socket_str) {
+                warn!("Error writing to connection: {e:?}");
+                self.echo_warn_str(format!("Send error: {e:?}").as_str())?;
+            }
         }
 
-        view_line_action_tx
-            .send(UiAction::AppendCompleteLine(styled_line))
-            .unwrap();
+        Ok(self.flush_buffer_updates()?)
     }
 
-    #[inline(always)]
-    fn echo_line(
-        line: &str,
-        view_line_action_tx: &UnboundedSender<UiAction>,
-    ) -> Result<(), anyhow::Error> {
-        let styled_line = Arc::new(StyledLine::from_echo_str(line));
-        view_line_action_tx
-            .send(UiAction::AppendCompleteLine(styled_line))
-            .context("Failed to send echo line to view")
+    fn flush_buffer_updates<'s>(
+        &'s mut self,
+    ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
+        if self.pending_buffer_updates.is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(log_file) = self.log_file.as_mut() {
+            for update in self.pending_buffer_updates.iter() {
+                match update {
+                    BufferUpdate::NewLine => {
+                        log_file.write_all(b"\n")?;
+                    }
+                    BufferUpdate::Append(line) => {
+                        log_file.write_all(line.as_bytes())?;
+                    }
+                }
+            }
+            log_file.flush()?;
+        }
+
+        Ok(Some(self.ui_tx.send(TaggedSessionEvent {
+            session_id: self.session_id,
+            event: SessionEvent::UpdateBuffer(Arc::new(
+                self.pending_buffer_updates.drain(..).collect(),
+            )),
+        })))
     }
 
-    #[inline(always)]
-    fn warn_line(
-        line: &str,
-        view_line_action_tx: &UnboundedSender<UiAction>,
-    ) -> Result<(), anyhow::Error> {
-        let styled_line = Arc::new(StyledLine::from_warn_str(line));
-        view_line_action_tx
-            .send(UiAction::AppendCompleteLine(styled_line))
-            .context("Failed to send echo line to view")
-    }
-
-    fn compile_javascript(scope: &mut v8::HandleScope, source: &str) -> v8::Global<v8::Script> {
-        let v8_script_source =
-            v8::String::new_from_utf8(scope, source.as_bytes(), v8::NewStringType::Normal).unwrap();
-
-        let unbound_script = v8::script_compiler::compile_unbound_script(
-            scope,
-            &mut Source::new(v8_script_source, None),
-            v8::script_compiler::CompileOptions::NoCompileOptions,
-            v8::script_compiler::NoCacheReason::BecauseV8Extension,
-        )
-        .unwrap();
-
-        let bound_script = unbound_script.open(scope).bind_to_current_context(scope);
-
-        Global::new(scope, bound_script)
-    }
-
-    #[inline(always)]
-    async fn handle_incoming_action(
-        id: &Arc<Mutex<i32>>,
-        server_name: Arc<String>,
-        session_runtime_tx: &UnboundedSender<RuntimeAction>,
-        session_runtime_oob_tx: &UnboundedSender<RuntimeAction>,
-        rustyscript: &mut Option<RustyRuntime>,
-        trigger_manager: &mut Manager,
-        view_line_action_tx: &UnboundedSender<UiAction>,
-        incoming_line_history_arc: &Arc<Mutex<IncomingLineHistory>>,
-        write_to_socket_tx: &mut Option<UnboundedSender<Arc<String>>>,
-        compiled_scripts: &mut Vec<v8::Global<v8::Script>>,
-        script_functions: &mut Rc<RefCell<Vec<v8::Global<v8::Function>>>>,
+    #[inline]
+    #[allow(clippy::unused_async)]
+    async fn handle_action(
+        &mut self,
         action: RuntimeAction,
     ) -> Result<ActionResult, anyhow::Error> {
+        debug!("Handling action: {:?}", action);
         match action {
+            RuntimeAction::Connect {
+                host,
+                port,
+                send_on_connect,
+            } => {
+                let mut connection =
+                    Connection::new(self.session_runtime_tx.clone(), self.ui_tx.clone());
+
+                if let Some(send_on_connect) = send_on_connect {
+                    let local_tx = self.session_runtime_tx.clone();
+                    let mut local_ui_tx = self.ui_tx.clone();
+                    let session_id = self.session_id;
+                    connection.on_connect(move || {                        
+                        local_tx.send(RuntimeAction::Send(send_on_connect)).ok();                        
+                    });
+                }
+                connection.connect(host.as_str(), port);
+
+                self.connection = Some(connection);
+                Ok(ActionResult::None)
+            }
             RuntimeAction::HandleIncomingLine(line) => {
-                match trigger_manager.process_incoming_line(line) {
-                    Ok(_) => Ok(ActionResult::SkipRepaint),
-                    Err(err) => Ok(ActionResult::Echo(format!(
-                        "Error processing line {:?}",
-                        err
-                    ))),
+                match self.trigger_manager.process_incoming_line(line) {
+                    Ok(()) => Ok(ActionResult::None),
+                    Err(err) => Ok(ActionResult::Echo(format!("Error processing line {err:?}"))),
                 }
             }
             RuntimeAction::HandleIncomingPartialLine(line) => {
-                match trigger_manager.process_partial_line(line) {
-                    Ok(_) => Ok(ActionResult::SkipRepaint),
+                match self.trigger_manager.process_partial_line(line) {
+                    Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!(
-                        "Error processing partial line {:?}",
-                        err
+                        "Error processing partial line {err:?}"
                     ))),
                 }
             }
-            RuntimeAction::RequestRepaint => Ok(ActionResult::RequestRepaint),
+            RuntimeAction::RequestRepaint => {
+                if let Some(fut) = self.flush_buffer_updates()? {
+                    fut.await?;
+                }
+                Ok(ActionResult::None)
+            }
             RuntimeAction::Echo(line) => {
-                Runtime::echo_line(line.as_str(), &view_line_action_tx)?;
-                Ok(ActionResult::RequestRepaint)
+                if let Some(fut) = self.echo_str(line.as_str())? {
+                    fut.await?;
+                }
+                Ok(ActionResult::None)
             }
-            RuntimeAction::PassthroughCompleteLine(line) => {
-                view_line_action_tx
-                    .send(UiAction::AppendCompleteLine(line.clone()))
-                    .unwrap();
-                let mut incoming_line_history = incoming_line_history_arc.lock().unwrap();
-                incoming_line_history.extend_line(line);
-                incoming_line_history.commit_current_line();
-                Ok(ActionResult::SkipRepaint)
+            RuntimeAction::AddCompleteLineToBuffer(line) => {
+                self.pending_buffer_updates.push(BufferUpdate::Append(line));
+                self.pending_buffer_updates.push(BufferUpdate::NewLine);
+                Ok(ActionResult::None)
             }
-            RuntimeAction::PassthroughPartialLine(line) => {
-                view_line_action_tx
-                    .send(UiAction::AppendPartialLine(line.clone()))
-                    .unwrap();
-                let mut incoming_line_history = incoming_line_history_arc.lock().unwrap();
-                incoming_line_history.extend_line(line);
-                Ok(ActionResult::SkipRepaint)
+            RuntimeAction::AddPartialLineToBuffer(line) => {
+                self.pending_buffer_updates.push(BufferUpdate::Append(line));
+                Ok(ActionResult::None)
             }
-            // RuntimeAction::EvalJavascriptTrigger(_line, script_id, matches) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
-            //     if let Some(script) = compiled_scripts.get(script_id) {
-            //         Ok(Runtime::run_script(
-            //             trigger_manager,
-            //             &mut deno.handle_scope(),
-            //             script,
-            //             matches,
-            //             0,
-            //         )
-            //         .unwrap_or_else(|err| {
-            //             ActionResult::Echo(format!("Error in Javascript Trigger: {:?}", err))
-            //         }))
-            //     } else {
-            //         bail!("Failed to load alias by script id {script_id}");
-            //     }
-            // }
-            // RuntimeAction::EvalJavascriptAlias(_line, script_id, matches, depth) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
-            //     if let Some(script) = compiled_scripts.get(script_id) {
-            //         Ok(Runtime::run_script(
-            //             trigger_manager,
-            //             &mut deno.handle_scope(),
-            //             script,
-            //             matches,
-            //             depth,
-            //         )
-            //         .unwrap_or_else(|err| {
-            //             ActionResult::Echo(format!("Error in Javascript Alias: {:?}", err))
-            //         }))
-            //     } else {
-            //         bail!("Failed to load alias by script id {script_id}");
-            //     }
-            // }
-            // RuntimeAction::EvalJavascriptFunctionAlias(_line, function_id, matches, depth) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
-            //     if let Some(f) = script_functions.borrow().get(function_id) {
-            //         Ok(Runtime::call_javascript_function(
-            //             trigger_manager,
-            //             &mut deno.handle_scope(),
-            //             f,
-            //             matches,
-            //             depth,
-            //         )
-            //         .unwrap_or_else(|err| {
-            //             ActionResult::Echo(format!("Error in Javascript Alias: {:?}", err))
-            //         }))
-            //     } else {
-            //         bail!("Failed to load function by id {function_id}");
-            //     }
-            // }
-
             RuntimeAction::Send(line) => {
-                match trigger_manager.process_outgoing_line(line.as_str()) {
-                    Ok(_) => Ok(ActionResult::SkipRepaint),
+                match self.trigger_manager.process_outgoing_line(line.as_str()) {
+                    Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!(
-                        "Error processing command {:?}",
-                        err
+                        "Error processing command {err:?}"
                     ))),
                 }
             }
             RuntimeAction::SendRaw(str) => {
-                for line in str.split(|ch| ch == '\n') {
-                    Runtime::send_line_as_command_input(
-                        line,
-                        &view_line_action_tx,
-                        &write_to_socket_tx,
-                    );
+                for line in str.split('\n') {
+                    if let Some(fut) = self.send(line)? {
+                        fut.await?;
+                    }
                 }
-                Ok(ActionResult::RequestRepaint)
+                if let Some(fut) = self.flush_buffer_updates()? {
+                    fut.await?;
+                }
+                Ok(ActionResult::None)
             }
-            RuntimeAction::UpdateWriteToSocketTx(option_tx) => {
-                *write_to_socket_tx = option_tx;
-                Ok(ActionResult::SkipRepaint)
+            RuntimeAction::EvalJavascript { id, matches, depth } => Ok(self
+                .script_engine
+                .run_script(&self.trigger_manager, id, &matches, depth)
+                .unwrap_or_else(|err| ActionResult::Echo(format!("JavaScript Error: {:?}", err)))),
+            RuntimeAction::CallJavascriptFunction { id, matches, depth } => Ok(self
+                .script_engine
+                .call_javascript_function(&self.trigger_manager, id, &matches, depth)
+                .unwrap_or_else(|err| {
+                    ActionResult::Echo(format!("Error in Javascript Function: {:?}", err))
+                })),
+            RuntimeAction::AddHotkey {
+                name: _name,
+                hotkey,
+            } => {
+                let hotkey_id = self.next_hotkey_id;
+                self.next_hotkey_id.0 = self.next_hotkey_id.0.add(1);
+                let action = match hotkey.language {
+                    ScriptLang::Plaintext => {
+                        ScriptAction::SendSimple(hotkey.script.clone().unwrap_or_default().into())
+                    }
+                    ScriptLang::JS | ScriptLang::TS => {
+                        let script_id = self
+                            .script_engine
+                            .add_script(hotkey.script.as_ref().map_or("", |s| s.as_str()))?;
+                        ScriptAction::EvalJavascript(script_id)
+                    }
+                };
+                self.hotkeys.insert(hotkey_id, action);
+                self.ui_tx
+                    .send(TaggedSessionEvent {
+                        session_id: self.session_id,
+                        event: SessionEvent::RegisterHotkey(hotkey_id, hotkey),
+                    })
+                    .await?;
+
+                Ok(ActionResult::None)
             }
-            // RuntimeAction::LoadJavascriptModules(paths) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
+            RuntimeAction::ExecHotkey { id } => {
+                if let Some(action) = self.hotkeys.get(&id) {
+                    match action {
+                        ScriptAction::SendRaw(script) => {
+                            if let Some(fut) = self.send(script.clone().as_str())? {
+                                fut.await?;
+                            }
+                            Ok(ActionResult::None)
+                        }
+                        ScriptAction::SendSimple(script) => {
+                            match self.trigger_manager.process_outgoing_line(script.as_str()) {
+                                Ok(()) => Ok(ActionResult::None),
+                                Err(err) => Ok(ActionResult::Echo(format!(
+                                    "Error processing command {err:?}"
+                                ))),
+                            }
+                        }
+                        ScriptAction::EvalJavascript(script_id) => {
+                            self.script_engine
+                                .run_script(&self.trigger_manager, *script_id, &Arc::new(vec![]), 0)
+                                .unwrap_or_else(|err| {
+                                    ActionResult::Echo(format!(
+                                        "Error in Javascript Function: {:?}",
+                                        err
+                                    ))
+                                });
 
-            //     let code = paths.iter().map(|path| format!("import '{path}';")).collect::<Vec<String>>().join("\n");
+                            Ok(ActionResult::None)
+                        }
+                        ScriptAction::CallJavascriptFunction(function_id) => {
+                            self.script_engine
+                                .call_javascript_function(
+                                    &self.trigger_manager,
+                                    *function_id,
+                                    &Arc::new(vec![]),
+                                    0,
+                                )
+                                .unwrap_or_else(|err| {
+                                    ActionResult::Echo(format!(
+                                        "Error calling Javascript Function: {:?}",
+                                        err
+                                    ))
+                                });
 
-            //     match deno
-            //         .load_main_es_module_from_code(&Url::from_str("smudgy://main").unwrap(), code)
-            //         .await
-            //     {
-            //         Ok(module_id) => {
-            //             let evaluation_result = {
-            //                 let mut receiver = deno.mod_evaluate(module_id);
+                            Ok(ActionResult::None)
+                        }
+                        ScriptAction::Noop => Ok(ActionResult::None),
+                    }
+                } else {
+                    bail!("Hotkey {id} not found")
+                }
+            }
+            RuntimeAction::AddAlias { name, alias } => {
+                match alias.language {
+                    ScriptLang::Plaintext => {
+                        self.trigger_manager.push_simple_alias(
+                            name,
+                            Arc::new(vec![alias.pattern]),
+                            alias.script.unwrap_or_default().into(),
+                        )?;
+                    }
+                    ScriptLang::JS | ScriptLang::TS => {
+                        let script_id = self
+                            .script_engine
+                            .add_script(alias.script.unwrap_or_default().as_str())?;
+                        self.trigger_manager.push_javascript_alias(
+                            &name,
+                            &Arc::new(vec![alias.pattern]),
+                            script_id,
+                        )?;
+                    }
+                };
 
-            //                 tokio::select! {
-            //                     biased;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::AddJavascriptFunctionAlias {
+                name,
+                patterns,
+                function_id,
+            } => {
+                self.trigger_manager
+                    .push_javascript_function_alias(name, patterns, function_id)?;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::AddTrigger { name, trigger } => {
+                let action = match trigger.language {
+                    ScriptLang::Plaintext => {
+                        ScriptAction::SendSimple(trigger.script.unwrap_or_default().into())
+                    }
+                    ScriptLang::JS | ScriptLang::TS => {
+                        let script_id = self
+                            .script_engine
+                            .add_script(trigger.script.unwrap_or_default().as_str())?;
+                        ScriptAction::EvalJavascript(script_id)
+                    }
+                };
 
-            //                     maybe_result = &mut receiver => {
-            //                         maybe_result
-            //                     }
-
-            //                     event_loop_result = deno.run_event_loop(PollEventLoopOptions::default()) => {
-            //                         event_loop_result?;
-            //                         receiver.await
-            //                     }
-            //                 }
-            //             };
-
-            //             if let Err(e) = evaluation_result {
-            //             Runtime::warn_line(
-            //                 format!("Failed to evaluate modules: {:?}", e).as_str(),
-            //                 view_line_action_tx,
-            //                 )?;
-            //             }
-            //         }
-            //         Err(e) => {
-            //             Runtime::warn_line(
-            //                 format!("Failed to load modules: {:?}", e).as_str(),
-            //                 view_line_action_tx,
-            //             )?;
-            //         }
-            //     }
-            //     Ok(ActionResult::SkipRepaint)
-            // }
-            // RuntimeAction::AddJavascriptAlias(name, pattern, source) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
-            //     let f =
-            //         Runtime::compile_javascript(&mut deno.handle_scope(), source.as_str());
-
-            //     let module_id = compiled_scripts.len();
-            //     compiled_scripts.push(f);
-
-            //     match trigger_manager.push_javascript_alias(&name, &pattern, module_id) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!(
-            //             "Error adding javascript alias: {:?}",
-            //             err
-            //         ))),
-            //     }
-            // }
-            // RuntimeAction::AddJavascriptFunctionAlias(name, pattern, f) => {
-            //     match trigger_manager.push_javascript_function_alias(name, pattern, f) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!(
-            //             "Error adding javascript function alias: {:?}",
-            //             err
-            //         ))),
-            //     }
-            // }
-            // RuntimeAction::AddSimpleAlias(name, pattern, source) => {
-            //     match trigger_manager.push_simple_alias(name, pattern, source) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!("Error adding alias: {:?}", err))),
-            //     }
-            // }
-            // RuntimeAction::AddJavascriptTrigger(
-            //     name,
-            //     patterns,
-            //     raw_patterns,
-            //     anti_patterns,
-            //     source,
-            //     prompt,
-            //     enabled,
-            // ) => {
-            //     let deno = rustyscript.as_mut().unwrap().deno_runtime();
-            //     let f =
-            //         Runtime::compile_javascript(&mut deno.handle_scope(), source.as_str());
-
-            //     let module_id = compiled_scripts.len();
-            //     compiled_scripts.push(f);
-
-            //     match trigger_manager.push_trigger(
-            //         PushTriggerParams {
-            //             name: &name,
-            //             patterns: &patterns,
-            //             raw_patterns: &raw_patterns,
-            //             anti_patterns: &anti_patterns,
-            //             action: trigger::Action::EvalJavascript(module_id),
-            //             prompt,
-            //             enabled
-            //         }
-            //     ) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!(
-            //             "Error adding javascript trigger: {:?}",
-            //             err
-            //         ))),
-            //     }
-            // }
-            // RuntimeAction::AddJavascriptFunctionTrigger(
-            //     name,
-            //     patterns,
-            //     raw_patterns,
-            //     anti_patterns,
-            //     f,
-            //     prompt,
-            //     enabled,
-            // ) => {
-            //     match trigger_manager.push_trigger(
-            //         PushTriggerParams {
-            //             name: &name,
-            //             patterns: &patterns,
-            //             raw_patterns: &raw_patterns,
-            //             anti_patterns: &anti_patterns,
-            //             action: trigger::Action::CallJavascriptFunction(f),
-            //             prompt,
-            //             enabled
-            //         }
-            //     ) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!(
-            //             "Error adding javascript function trigger: {:?}",
-            //             err
-            //         ))),
-            //     }
-            // }
-            // RuntimeAction::AddSimpleTrigger(
-            //     name,
-            //     patterns,
-            //     raw_patterns,
-            //     anti_patterns,
-            //     source,
-            //     prompt,
-            //     enabled,
-            // ) => {
-            //     match trigger_manager.push_trigger(
-            //         PushTriggerParams {
-            //             name: &name,
-            //             patterns: &patterns,
-            //             raw_patterns: &raw_patterns,
-            //             anti_patterns: &anti_patterns,
-            //             action: trigger::Action::ProcessScript(source),
-            //             prompt,
-            //             enabled
-            //         }
-            //     ) {
-            //         Ok(_) => Ok(ActionResult::SkipRepaint),
-            //         Err(err) => Ok(ActionResult::Echo(format!(
-            //             "Error adding simple trigger: {:?}",
-            //             err
-            //         ))),
-            //     }
-            // }
+                self.trigger_manager.push_trigger(PushTriggerParams {
+                    name: &name,
+                    patterns: &Arc::new(trigger.patterns.unwrap_or_default()),
+                    raw_patterns: &Arc::new(trigger.raw_patterns.unwrap_or_default()),
+                    anti_patterns: &Arc::new(trigger.anti_patterns.unwrap_or_default()),
+                    action: action,
+                    enabled: trigger.enabled,
+                    prompt: trigger.prompt,
+                })?;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::AddJavascriptFunctionTrigger {
+                name,
+                patterns,
+                raw_patterns,
+                anti_patterns,
+                function_id,
+                prompt,
+                enabled,
+            } => {
+                self.trigger_manager.push_trigger(PushTriggerParams {
+                    name: &name,
+                    patterns: &patterns,
+                    raw_patterns: &raw_patterns,
+                    anti_patterns: &anti_patterns,
+                    action: ScriptAction::CallJavascriptFunction(function_id),
+                    enabled,
+                    prompt,
+                })?;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::EnableAlias(name, enabled) => {
+                self.trigger_manager.enable_alias(&name, enabled);
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::EnableTrigger(name, enabled) => {
+                self.trigger_manager.enable_trigger(&name, enabled);
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::Connected => {
+                self.ui_tx.send(TaggedSessionEvent {
+                    session_id: self.session_id,
+                    event: SessionEvent::Connected,
+                }).await?;
+                Ok(ActionResult::None)
+            }
             RuntimeAction::Reload => {
-                let tokio_runtime = rustyscript.take().unwrap().tokio_runtime();
-                let (new_rustyscript, new_trigger_manager) = Runtime::load_scripts(
-                    id,
-                    script_functions,
-                    compiled_scripts,
-                    session_runtime_oob_tx,
-                    server_name
-                );
-                rustyscript.replace(new_rustyscript);
-                *trigger_manager = new_trigger_manager;
-                Runtime::echo_line("Reloading...", view_line_action_tx)?;
-                Ok(ActionResult::SkipRepaint)
-            }
+                Ok(ActionResult::Reload)
+            },
+            RuntimeAction::Shutdown => Ok(ActionResult::CloseSession),
+            RuntimeAction::Noop => Ok(ActionResult::None),
         }
     }
 
-    #[inline(always)]
-    fn run_script(
-        trigger_manager: &Manager,
-        scope: &mut v8::HandleScope,
-        script: &v8::Global<v8::Script>,
-        matches: Arc<Vec<(String, String)>>,
-        depth: u32,
-    ) -> Result<ActionResult> {
-        let started = Instant::now();
-        let result = {
-            let try_catch = &mut v8::TryCatch::new(scope);
+    pub async fn run(&mut self) -> RunAction {
+        let mut script_engine_tick_interval = ScriptEngine::tick_interval();
 
-            let matches_object = v8::Object::new(try_catch);
-            for (k, v) in matches.iter() {
-                let arg_k = v8::String::new(try_catch, k).unwrap();
-                let arg_v = v8::String::new(try_catch, v).unwrap();
-                matches_object.create_data_property(try_catch, arg_k.into(), arg_v.into());
-            }
+        // TODO: make logging configurable
+        self.start_logging().unwrap();
 
-            let matches_name = v8::String::new(try_catch, "matches").unwrap();
-
-            try_catch.get_current_context().global(try_catch).set(
-                try_catch,
-                matches_name.into(),
-                matches_object.into(),
-            );
-
-            let result = script.open(try_catch).run(try_catch);
-
-            if try_catch.has_caught() {
-                let ex = try_catch.exception().unwrap();
-                let exc = ex.to_string(try_catch).unwrap();
-                let exc = exc.to_rust_string_lossy(try_catch);
-                Ok(ActionResult::Echo(exc))
-            } else {
-                if let Some(value) = result {
-                    if value.boolean_value(try_catch) {
-                        let output = value.open(try_catch).to_rust_string_lossy(try_catch);
-                        trigger_manager.process_nested_outgoing_line(output.as_str(), depth + 1)?;
-                        Ok(ActionResult::SkipRepaint)
-                    } else {
-                        Ok(ActionResult::SkipRepaint)
-                    }
-                } else {
-                    Ok(ActionResult::SkipRepaint)
-                }
-            }
-        };
-
-        let elapsed = started.elapsed();
-        debug!(
-            "Script execution on {} took {:?}",
-            matches
-                .get(0)
-                .unwrap_or(&("".to_string(), "unknown".to_string()))
-                .1,
-            elapsed
+        info!(
+            "Session [{}, {} - {}] Started",
+            self.session_id, self.server_name, self.profile_name
         );
-        result
-    }
 
-    #[inline(always)]
-    fn call_javascript_function(
-        trigger_manager: &Manager,
-        scope: &mut v8::HandleScope,
-        f: &v8::Global<v8::Function>,
-        matches: Arc<Vec<(String, String)>>,
-        depth: u32,
-    ) -> Result<ActionResult> {
-        let started = Instant::now();
-        let result = {
-            let try_catch = &mut v8::TryCatch::new(scope);
-
-            let matches_object = v8::Object::new(try_catch);
-            for (k, v) in matches.iter() {
-                let arg_k = v8::String::new(try_catch, k).unwrap();
-                let arg_v = v8::String::new(try_catch, v).unwrap();
-                matches_object.create_data_property(try_catch, arg_k.into(), arg_v.into());
-            }
-
-            let f = f.open(try_catch);
-            let f_this = v8::undefined(try_catch).into();
-            let result = f.call(try_catch, f_this, &[matches_object.into()]);
-
-            if try_catch.has_caught() {
-                let ex = try_catch.exception().unwrap();
-                let exc = ex.to_string(try_catch).unwrap();
-                let exc = exc.to_rust_string_lossy(try_catch);
-                Ok(ActionResult::Echo(exc))
-            } else {
-                if let Some(value) = result {
-                    if value.boolean_value(try_catch) {
-                        let output = value.open(try_catch).to_rust_string_lossy(try_catch);
-                        trigger_manager.process_nested_outgoing_line(output.as_str(), depth + 1)?;
-                        Ok(ActionResult::SkipRepaint)
-                    } else {
-                        Ok(ActionResult::SkipRepaint)
-                    }
-                } else {
-                    Ok(ActionResult::SkipRepaint)
-                }
-            }
-        };
-
-        let elapsed = started.elapsed();
-        debug!(
-            "Script execution on {} took {:?}",
-            matches
-                .get(0)
-                .unwrap_or(&("".to_string(), "unknown".to_string()))
-                .1,
-            elapsed
-        );
-        result
-    }
-
-    async fn run_event_loop(
-        id: Arc<Mutex<i32>>,
-        server_name: Arc<String>,
-        rustyscript: RustyRuntime,
-        mut trigger_manager: Manager,
-        mut session_runtime_rx: UnboundedReceiver<RuntimeAction>,
-        mut session_runtime_oob_rx: UnboundedReceiver<RuntimeAction>,
-        session_runtime_tx: UnboundedSender<RuntimeAction>,
-        session_runtime_oob_tx: UnboundedSender<RuntimeAction>,
-        view_line_action_tx: UnboundedSender<UiAction>,
-        incoming_line_history_arc: Arc<Mutex<IncomingLineHistory>>,
-        mut compiled_scripts: Vec<v8::Global<v8::Script>>,
-        mut script_functions: Rc<RefCell<Vec<v8::Global<v8::Function>>>>,
-    ) {
-        let mut write_to_socket_tx: Option<UnboundedSender<Arc<String>>> = None;
-
-        let mut deno_event_loop_interval =
-            tokio::time::interval(tokio::time::Duration::from_micros(100));
-        deno_event_loop_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        let mut rustyscript = Some(rustyscript);
+        
+        if let Err(e) = self.ui_tx
+            .send(TaggedSessionEvent {
+                session_id: self.session_id,
+                event: SessionEvent::RuntimeReady(self.session_runtime_tx.clone()),
+            })
+            .await
+        {
+            error!("Failed to send runtime ready event: {:?}", e);
+        }
 
         loop {
-
             std::future::poll_fn(|cx| {
-                Poll::Ready(match rustyscript.as_mut().unwrap().deno_runtime().poll_event_loop(cx, PollEventLoopOptions::default()) {
+                Poll::Ready(match self.script_engine.poll_event_loop(cx) {
                     Poll::Ready(t) => t.map(|()| false),
                     Poll::Pending => Ok(true),
                 })
-            }).await.map_err(|err| {
-                warn!("Error in deno event loop: {:?}", err);
-                Runtime::warn_line(format!("{:?}", err).as_str(), &view_line_action_tx)
+            })
+            .await
+            .map_err(|err| {
+                warn!("Error in script engine event loop: {err:?}");
+                self.echo_warn_str(format!("{err:?}").as_str())
             })
             .ok();
 
             select! {
                 biased;
-                _ = deno_event_loop_interval.tick() => {
+                _ = script_engine_tick_interval.tick() => {
                     // this serves to trigger a cancel on the pending receive below when it's time
                     // for the event loop above to tick
                 }
-                // TODO: until I have a better way of handling OOB messages, this block must perfectly mirror the one below it
-                Some(action) = session_runtime_oob_rx.recv() => {
-                    trace!("Handling OOB action: {:?}", action);
-                    match Runtime::handle_incoming_action(
-                    &id,
-                    server_name.clone(),
-                    &session_runtime_tx,
-                    &session_runtime_oob_tx,
-                    &mut rustyscript,
-                    &mut trigger_manager,
-                    &view_line_action_tx,
-                    &incoming_line_history_arc,
-                    &mut write_to_socket_tx,
-                    &mut compiled_scripts,
-                    &mut script_functions,
-                    action,
-                    ).await {
-                        Ok(ActionResult::RequestRepaint) => {
-                            warn!("ActionResult::RequestRepaint called but not implemented");
-                        }
-                        Ok(ActionResult::SkipRepaint) => {}
+                Some(action) = self.session_runtime_oob_rx.recv() => {
+                    trace!("Handling OOB action: {action:?}");
+                    match self.handle_action(action).await {
+                        Ok(ActionResult::None) => {}
                         Ok(ActionResult::Echo(line)) => {
-                            match Runtime::echo_line(line.as_str(), &view_line_action_tx) {
-                                Ok(_) => {
-                                    warn!("ActionResult::Echo should request a repaint but it is not implemented");
-                                }
-                                Err(_) => {
+                            if let Ok(Some(fut)) = self.echo_str(line.as_str()) {
+                                if let Err(_) = fut.await {
                                     warn!("Failed to echo line");
                                     break;
                                 }
+                            } else {
+                                warn!("Failed to echo line");
+                                break;
                             }
                         }
                         Ok(ActionResult::CloseSession) => {
-                            trace!("Session runtime event loop ending");
+                            info!("Session [{}, {} - {}] Closing", self.session_id, self.server_name, self.profile_name);
                             break;
                         }
+                        Ok(ActionResult::Reload) => {
+                            return RunAction::Reload;
+                        }
                         Err(err) => {
-                            warn!("Error in script runtime: {:?}, ending", err);
+                            warn!("Error in script runtime: {err:?}, ending");
                             break;
                         }
                     }
                 }
-                Some(action) = session_runtime_rx.recv() => {
-                    trace!("Handling action: {:?}", action);
-                    match Runtime::handle_incoming_action(
-                        &id,
-                        server_name.clone(),
-                        &session_runtime_tx,
-                        &session_runtime_oob_tx,
-                        &mut rustyscript,
-                        &mut trigger_manager,
-                        &view_line_action_tx,
-                        &incoming_line_history_arc,
-                        &mut write_to_socket_tx,
-                        &mut compiled_scripts,
-                        &mut script_functions,
-                        action,
-                    ).await {
-                        Ok(ActionResult::RequestRepaint) => {
-                            warn!("ActionResult::RequestRepaint called but not implemented");
-                        }
-                        Ok(ActionResult::SkipRepaint) => {}
+                Some(action) = self.session_runtime_rx.recv() => {
+                    trace!("Handling action: {action:?}");
+                    match self.handle_action(action).await {
+                        Ok(ActionResult::None) => {}
                         Ok(ActionResult::Echo(line)) => {
-                            match Runtime::echo_line(line.as_str(), &view_line_action_tx) {
-                                Ok(_) => {
-                                    warn!("ActionResult::Echo should request a repaint but it is not implemented");
-                                }
-                                Err(_) => {
+                            if let Ok(Some(fut)) = self.echo_str(line.as_str()) {
+                                if let Err(_) = fut.await {
                                     warn!("Failed to echo line");
                                     break;
                                 }
+                            } else {
+                                warn!("Failed to echo line");
+                                break;
                             }
                         }
                         Ok(ActionResult::CloseSession) => {
-                            trace!("Session runtime event loop ending");
+                            info!("Session [{}, {} - {}] Closing", self.session_id, self.server_name, self.profile_name);
                             break;
                         }
-                        Err(err) => {
-                            warn!("Error in script runtime: {:?}, ending", err);
+                        Ok(ActionResult::Reload) => {
+                            return RunAction::Reload;
+                        }
+                         Err(err) => {
+                            warn!("Error in script runtime: {err:?}, ending");
                             break;
                         }
                     }
                 }
             }
         }
+
+        RunAction::None
+    }
+
+    fn start_logging(&mut self) -> Result<()> {
+        let path = get_smudgy_home()?
+            .join(self.server_name.as_str())
+            .join("logs")
+            .join(format!(
+                "{}-{}.log",
+                self.profile_name,
+                chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+            ));
+        self.log_file = Some(BufWriter::with_capacity(65536, File::create(path)?));
+        Ok(())
     }
 }

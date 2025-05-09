@@ -1,18 +1,15 @@
-use serde::{Deserialize, Serialize};
 use crate::get_smudgy_home;
-use anyhow::{Context, Result};
-use std::{collections::HashMap, fs, io, path::PathBuf};
 use crate::models::packages::PackageTree;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fs, io, path::PathBuf};
+
+use super::ScriptLang;
 
 // Helper function for serde to default boolean fields to true.
 fn default_true() -> bool {
     true
 }
-
-// Represents the programming language of a script.
-// TODO: Consider moving this to a more central location (e.g., models.rs) if Triggers also use it.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptLang { JS, TS }
 
 /// Represents the definition of a single hotkey.
 ///
@@ -34,6 +31,9 @@ pub struct HotkeyDefinition {
     /// Optional package path (e.g., "general/movement"). `None` indicates root package.
     #[serde(default)]
     pub package: Option<String>,
+    /// The language of the script. Defaults to Plaintext.
+    #[serde(default)]
+    pub language: ScriptLang,
     /// Whether this specific hotkey is enabled. Defaults to true.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -41,7 +41,8 @@ pub struct HotkeyDefinition {
 
 impl HotkeyDefinition {
     /// Checks if the hotkey is effectively enabled.
-    #[must_use] pub fn is_effectively_enabled(&self, package_tree: &PackageTree) -> bool {
+    #[must_use]
+    pub fn is_effectively_enabled(&self, package_tree: &PackageTree) -> bool {
         if !self.enabled {
             return false;
         }
@@ -54,7 +55,11 @@ impl HotkeyDefinition {
     }
 
     /// Attempts to retrieve the script content and its language.
-    pub fn get_script_content(&self, hotkey_name: &str, server_name: &str) -> Result<Option<(String, ScriptLang)>> {
+    pub fn get_script_content(
+        &self,
+        hotkey_name: &str,
+        server_name: &str,
+    ) -> Result<Option<(String, ScriptLang)>> {
         if let Some(inline_content) = &self.script {
             // TODO: Determine language of inline scripts. Assume JS for now.
             return Ok(Some((inline_content.clone(), ScriptLang::JS)));
@@ -66,7 +71,10 @@ impl HotkeyDefinition {
         if ts_path.exists() {
             match fs::read_to_string(&ts_path) {
                 Ok(content) => return Ok(Some((content, ScriptLang::TS))),
-                Err(e) => return Err(anyhow::Error::from(e).context(format!("Failed to read script file: {ts_path:?}"))),
+                Err(e) => {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("Failed to read script file: {ts_path:?}")));
+                }
             }
         }
 
@@ -74,15 +82,26 @@ impl HotkeyDefinition {
         if js_path.exists() {
             match fs::read_to_string(&js_path) {
                 Ok(content) => return Ok(Some((content, ScriptLang::JS))),
-                Err(e) => return Err(anyhow::Error::from(e).context(format!("Failed to read script file: {js_path:?}"))),
+                Err(e) => {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("Failed to read script file: {js_path:?}")));
+                }
             }
         }
         Ok(None)
     }
 
+
+
     /// Gets the expected filesystem path for a file-based script.
-    pub fn get_expected_script_path(&self, hotkey_name: &str, server_name: &str, lang: ScriptLang) -> Result<PathBuf> {
+    pub fn get_expected_script_path(
+        &self,
+        hotkey_name: &str,
+        server_name: &str,
+        lang: ScriptLang,
+    ) -> Result<PathBuf> {
         let ext = match lang {
+            ScriptLang::Plaintext => "txt",
             ScriptLang::JS => "js",
             ScriptLang::TS => "ts",
         };
@@ -148,10 +167,7 @@ pub fn load_hotkeys(server_name: &str) -> Result<HashMap<String, HotkeyDefinitio
 ///
 /// Returns an error if the server or hotkeys directory cannot be accessed, or if
 /// `hotkeys.json` cannot be written.
-pub fn save_hotkeys(
-    server_name: &str,
-    hotkeys: &HashMap<String, HotkeyDefinition>,
-) -> Result<()> {
+pub fn save_hotkeys(server_name: &str, hotkeys: &HashMap<String, HotkeyDefinition>) -> Result<()> {
     let smudgy_dir = get_smudgy_home()?;
     let hotkeys_dir = smudgy_dir.join(server_name).join("hotkeys");
 
@@ -175,4 +191,9 @@ pub fn save_hotkeys(
     ))?;
 
     Ok(())
-} 
+}
+
+
+
+
+

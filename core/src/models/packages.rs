@@ -49,8 +49,9 @@ pub fn load_packages(server_name: &str) -> Result<PackageTree> {
 
     match fs::read_to_string(&packages_path) {
         Ok(content) => {
-            let tree: PackageTree = serde_json::from_str(&content)
-                .context(format!("Failed to parse packages.json for server '{server_name}'"))?;
+            let tree: PackageTree = serde_json::from_str(&content).context(format!(
+                "Failed to parse packages.json for server '{server_name}'"
+            ))?;
             Ok(tree)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -59,7 +60,9 @@ pub fn load_packages(server_name: &str) -> Result<PackageTree> {
         }
         Err(e) => {
             // Other read errors are propagated
-            Err(e).context(format!("Failed to read packages.json for server '{server_name}'"))
+            Err(e).context(format!(
+                "Failed to read packages.json for server '{server_name}'"
+            ))
         }
     }
 }
@@ -91,8 +94,9 @@ pub fn save_packages(server_name: &str, tree: &PackageTree) -> Result<()> {
 
     let packages_path = server_path.join("packages.json");
 
-    let json_content = serde_json::to_string_pretty(tree)
-        .context(format!("Failed to serialize package tree for server '{server_name}'"))?;
+    let json_content = serde_json::to_string_pretty(tree).context(format!(
+        "Failed to serialize package tree for server '{server_name}'"
+    ))?;
 
     fs::write(&packages_path, json_content).context(format!(
         "Failed to write packages.json for server '{server_name}' at {packages_path:?}"
@@ -117,7 +121,8 @@ pub fn save_packages(server_name: &str, tree: &PackageTree) -> Result<()> {
 ///
 /// Returns `true` if the package path is effectively enabled, `false` otherwise.
 /// Returns `false` if the path is invalid or doesn't exist in the tree.
-#[must_use] pub fn is_package_effectively_enabled(path_str: &str, tree: &PackageTree) -> bool {
+#[must_use]
+pub fn is_package_effectively_enabled(path_str: &str, tree: &PackageTree) -> bool {
     let components: Vec<&str> = if path_str.is_empty() {
         vec![]
     } else {
@@ -127,7 +132,8 @@ pub fn save_packages(server_name: &str, tree: &PackageTree) -> Result<()> {
     let mut current_level: &HashMap<String, PackageNode> = tree;
 
     for component in components {
-        if component.is_empty() { // Handle accidental double slashes like "combat//defense"
+        if component.is_empty() {
+            // Handle accidental double slashes like "combat//defense"
             continue;
         }
         match current_level.get(component) {
@@ -149,4 +155,4 @@ pub fn save_packages(server_name: &str, tree: &PackageTree) -> Result<()> {
     true
 }
 
-// Functions for loading, saving, and querying the package tree will go here. 
+// Functions for loading, saving, and querying the package tree will go here.

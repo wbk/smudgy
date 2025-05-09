@@ -1,11 +1,11 @@
-// Models related to server configurations 
+// Models related to server configurations
 
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use validator::Validate;
 use crate::get_smudgy_home;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::{fs, io};
+use validator::Validate;
 
 /// Represents the configuration for a single server connection.
 /// This struct is serialized to/from `server.json` within the server's directory.
@@ -109,8 +109,8 @@ pub fn list_servers() -> Result<Vec<Server>> {
 /// Returns an error if the file cannot be opened, read, or if the contents
 /// cannot be deserialized into a `ServerConfig`.
 fn load_server_config(path: &PathBuf) -> Result<ServerConfig> {
-    let file_content = fs::read_to_string(path)
-        .context(format!("Failed to read server config file: {path:?}"))?;
+    let file_content =
+        fs::read_to_string(path).context(format!("Failed to read server config file: {path:?}"))?;
     let config: ServerConfig = serde_json::from_str(&file_content)
         .context(format!("Failed to parse server config file: {path:?}"))?;
     config
@@ -133,12 +133,7 @@ fn load_server_config(path: &PathBuf) -> Result<ServerConfig> {
 /// Returns an error if any of the directories cannot be created.
 pub fn ensure_server_subdirs(server_path: &PathBuf) -> Result<()> {
     let subdirs = [
-        "profiles",
-        "aliases",
-        "hotkeys",
-        "triggers",
-        "modules",
-        "maps",
+        "profiles", "aliases", "hotkeys", "triggers", "modules", "maps", "logs",
     ];
 
     for subdir in &subdirs {
@@ -202,9 +197,8 @@ pub fn create_server(name: &str, config: ServerConfig) -> Result<Server> {
 
     // Write the server.json file
     let config_path = server_path.join("server.json");
-    let config_json = serde_json::to_string_pretty(&config).context(format!(
-        "Failed to serialize config for server '{name}'"
-    ))?;
+    let config_json = serde_json::to_string_pretty(&config)
+        .context(format!("Failed to serialize config for server '{name}'"))?;
 
     fs::write(&config_path, config_json).context(format!(
         "Failed to write server.json for server '{name}' at {config_path:?}"
@@ -368,4 +362,4 @@ pub fn delete_server(name: &str) -> Result<()> {
     }
 
     Ok(())
-} 
+}

@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::get_smudgy_home;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::{fs, io};
 
 /// Represents the user's theme choice in a serializable way.
@@ -14,7 +14,6 @@ pub enum ThemeChoice {
     Dark,
     TokyoNight,
 }
-
 
 /// Represents the global application settings.
 ///
@@ -51,7 +50,8 @@ impl Default for Settings {
 /// # Returns
 ///
 /// The loaded `Settings` or `Settings::default()`.
-#[must_use] pub fn load_settings() -> Settings {
+#[must_use]
+pub fn load_settings() -> Settings {
     match try_load_settings() {
         Ok(settings) => settings,
         Err(e) => {
@@ -62,14 +62,21 @@ impl Default for Settings {
 }
 
 /// Internal helper function to attempt loading settings and return a Result.
+///
+/// # Errors
+///
+/// This function can return an error in the following cases:
+/// - If the smudgy home directory cannot be determined (e.g., `dirs::home_dir()` is `None`).
+/// - If reading `settings.json` fails for reasons other than the file not being found (e.g., permission issues).
+/// - If parsing the content of `settings.json` fails (e.g., invalid JSON format).
 fn try_load_settings() -> Result<Settings> {
     let smudgy_dir = get_smudgy_home()?;
     let settings_path = smudgy_dir.join("settings.json");
 
     match fs::read_to_string(&settings_path) {
         Ok(content) => {
-            let settings: Settings = serde_json::from_str(&content)
-                .context("Failed to parse settings.json")?;
+            let settings: Settings =
+                serde_json::from_str(&content).context("Failed to parse settings.json")?;
             Ok(settings)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -78,7 +85,10 @@ fn try_load_settings() -> Result<Settings> {
         }
         Err(e) => {
             // Other read errors are propagated
-            Err(e).context(format!("Failed to read settings.json at {settings_path:?}"))
+            Err(e).context(format!(
+                "Failed to read settings.json at {}",
+                settings_path.display()
+            ))
         }
     }
 }
@@ -93,18 +103,21 @@ fn try_load_settings() -> Result<Settings> {
 ///
 /// # Errors
 ///
-/// Returns an error if the smudgy home directory cannot be determined or the file
-/// cannot be written.
+/// Returns an error if:
+/// - The smudgy home directory cannot be determined.
+/// - The settings cannot be serialized to JSON.
+/// - The `settings.json` file cannot be written to disk (e.g., permission issues, disk full).
 pub fn save_settings(settings: &Settings) -> Result<()> {
     let smudgy_dir = get_smudgy_home()?;
     let settings_path = smudgy_dir.join("settings.json");
 
-    let json_content = serde_json::to_string_pretty(settings)
-        .context("Failed to serialize settings")?;
+    let json_content =
+        serde_json::to_string_pretty(settings).context("Failed to serialize settings")?;
 
     fs::write(&settings_path, json_content).context(format!(
-        "Failed to write settings.json at {settings_path:?}"
+        "Failed to write settings.json at {}",
+        settings_path.display()
     ))?;
 
     Ok(())
-} 
+}

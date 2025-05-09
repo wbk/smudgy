@@ -24,7 +24,7 @@ extern crate log;
 /// smudgy directory cannot be created.
 pub fn get_smudgy_home() -> Result<PathBuf> {
     let mut dir = dirs::document_dir().context("Failed to get user document directory")?;
-    dir.push("iced-smudgy");
+    dir.push("smudgy");
 
     fs::create_dir_all(&dir).context(format!(
         "Failed to create smudgy directory at {}",
@@ -34,13 +34,70 @@ pub fn get_smudgy_home() -> Result<PathBuf> {
     Ok(dir)
 }
 
-pub fn init() {
-    // Define settings for the application window
+/// Initialize logging configuration.
+/// 
+/// In debug builds, uses pretty_env_logger for colorized console output.
+/// In release builds, logs to a file named "smudgy.log" in the smudgy home directory
+/// with timestamp information.
+///
+/// # Errors
+///
+/// Returns an error if logging initialization fails or if the log file cannot be created
+/// in release builds.
+fn init_logging() -> Result<()> {
+    // Set default log level if not specified
     if std::env::var("SMUDGY_LOG").is_err() {
-        // This only needs to be wrapped with unsafe because it isn't thread-safe; this is ok because we're only going to use this once, on the current thread
+        // This only needs to be wrapped with unsafe because it isn't thread-safe; 
+        // this is ok because we're only going to use this once, on the current thread
         unsafe {
             std::env::set_var("SMUDGY_LOG", "debug");
         }
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        // Debug build: use pretty console logger
+        pretty_env_logger::try_init_timed_custom_env("SMUDGY_LOG")
+            .context("Failed to initialize pretty logger")?;
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // Release build: use file logger
+        use simplelog::*;
+        use std::fs::File;
+
+        let log_level = match std::env::var("SMUDGY_LOG").unwrap_or_else(|_| "debug".to_string()).to_lowercase().as_str() {
+            "trace" => LevelFilter::Trace,
+            "debug" => LevelFilter::Debug,
+            "info" => LevelFilter::Info,
+            "warn" => LevelFilter::Warn,
+            "error" => LevelFilter::Error,
+            _ => LevelFilter::Debug,
+        };
+
+        let smudgy_home = get_smudgy_home()
+            .context("Failed to get smudgy home directory for logging")?;
+        let log_file_path = smudgy_home.join("smudgy.log");
+        
+        let log_file = File::create(&log_file_path)
+            .context(format!("Failed to create log file at {}", log_file_path.display()))?;
+
+        WriteLogger::init(
+            log_level,
+            Config::default(),
+            log_file,
+        ).context("Failed to initialize file logger")?;
+    }
+
+    Ok(())
+}
+
+pub fn init() {
+    // Initialize logging
+    if let Err(e) = init_logging() {
+        eprintln!("Failed to initialize logging: {}", e);
+        // Continue execution even if logging fails
     }
 
     info!(
@@ -49,8 +106,6 @@ pub fn init() {
         env!("CARGO_PKG_VERSION"),
         build_time::build_time_local!("%Y-%m-%d %H:%M:%S")
     );
-
-    pretty_env_logger::init_custom_env("SMUDGY_LOG");
 
     deno_core::JsRuntime::init_platform(None, false);
     trace!(
@@ -61,3 +116,4 @@ pub fn init() {
 
 pub mod models;
 pub mod session;
+pub mod terminal_buffer;

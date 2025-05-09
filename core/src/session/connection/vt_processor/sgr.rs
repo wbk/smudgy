@@ -2,7 +2,7 @@ use vtparse::CsiParam;
 
 use crate::session::styled_line::Style;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AnsiColor {
     Black,
     Red,
@@ -14,7 +14,7 @@ pub enum AnsiColor {
     White,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Color {
     Ansi { color: AnsiColor, bold: bool },
     Rgb { r: u8, g: u8, b: u8 },
@@ -22,6 +22,36 @@ pub enum Color {
     Output,
     Warn,
     DefaultBackground,
+}
+
+impl From<Color> for iced::Color {
+    fn from(vt_color: Color) -> Self {
+        match vt_color {
+            Color::Ansi { color, bold } => match (color, bold) {
+                (AnsiColor::Black, false) => iced::Color::from_rgb8(0, 0, 0),
+                (AnsiColor::Red, false) => iced::Color::from_rgb8(170, 0, 0),
+                (AnsiColor::Green, false) => iced::Color::from_rgb8(0, 170, 0),
+                (AnsiColor::Yellow, false) => iced::Color::from_rgb8(170, 170, 0),
+                (AnsiColor::Blue, false) => iced::Color::from_rgb8(0, 0, 170),
+                (AnsiColor::Magenta, false) => iced::Color::from_rgb8(170, 0, 170),
+                (AnsiColor::Cyan, false) => iced::Color::from_rgb8(0, 170, 170),
+                (AnsiColor::White, false) => iced::Color::from_rgb8(204, 204, 204),
+                (AnsiColor::Black, true) => iced::Color::from_rgb8(85, 85, 85),
+                (AnsiColor::Red, true) => iced::Color::from_rgb8(255, 85, 85),
+                (AnsiColor::Green, true) => iced::Color::from_rgb8(85, 255, 85),
+                (AnsiColor::Yellow, true) => iced::Color::from_rgb8(255, 255, 85),
+                (AnsiColor::Blue, true) => iced::Color::from_rgb8(85, 85, 255),
+                (AnsiColor::Magenta, true) => iced::Color::from_rgb8(255, 85, 255),
+                (AnsiColor::Cyan, true) => iced::Color::from_rgb8(85, 255, 255),
+                (AnsiColor::White, true) => iced::Color::from_rgb8(255, 255, 255),
+            },
+            Color::Rgb { r, g, b } => iced::Color::from_rgb8(r, g, b),
+            Color::Echo => iced::Color::from_rgb8(192, 255, 255),
+            Color::Warn => iced::Color::from_rgb8(255, 192, 85),
+            Color::Output => iced::Color::from_rgb8(255, 255, 192),
+            Color::DefaultBackground => iced::Color::TRANSPARENT,
+        }
+    }
 }
 
 enum SgrState {
@@ -39,6 +69,7 @@ enum SgrState {
     Invalid,
 }
 
+#[allow(clippy::match_wildcard_for_single_variants, clippy::too_many_lines)]
 pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
     let mut state = SgrState::Ready {
         style: initial_style,
@@ -54,7 +85,7 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                                 color: AnsiColor::White,
                                 bold: false,
                             },
-                            bg: Color::DefaultBackground
+                            bg: Color::DefaultBackground,
                         },
                     },
                     1 => SgrState::Ready {
@@ -112,16 +143,16 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                             ..style
                         },
                     },
-                    38 => SgrState::SetForegroundReceived {style},
+                    38 => SgrState::SetForegroundReceived { style },
                     _ => SgrState::Invalid,
                 },
                 _ => SgrState::Ready { style },
             },
-            SgrState::SetForegroundReceived {style }=> match param {
+            SgrState::SetForegroundReceived { style } => match param {
                 CsiParam::P(b';') => SgrState::SetForegroundAwaitMode { style },
                 _ => SgrState::Invalid,
             },
-            SgrState::SetForegroundAwaitMode  { style } => match param {
+            SgrState::SetForegroundAwaitMode { style } => match param {
                 CsiParam::Integer(2) => SgrState::SetForegroundMode2 { style },
                 CsiParam::Integer(5) => SgrState::SetForegroundMode5 { style },
                 _ => SgrState::Invalid,
@@ -131,7 +162,10 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                 _ => SgrState::Invalid,
             },
             SgrState::SetForegroundMode2Red { style } => match param {
-                CsiParam::Integer(r) => SgrState::SetForegroundMode2ReceivedRed { style, r: *r as u8 },
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                CsiParam::Integer(r) => {
+                    SgrState::SetForegroundMode2ReceivedRed { style, r: *r as u8 }
+                }
                 _ => SgrState::Invalid,
             },
             SgrState::SetForegroundMode2ReceivedRed { style, r } => match param {
@@ -139,9 +173,12 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                 _ => SgrState::Invalid,
             },
             SgrState::SetForegroundMode2Green { style, r } => match param {
-                CsiParam::Integer(g) => {
-                    SgrState::SetForegroundMode2ReceivedGreen { style, r, g: *g as u8 }
-                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                CsiParam::Integer(g) => SgrState::SetForegroundMode2ReceivedGreen {
+                    style,
+                    r,
+                    g: *g as u8,
+                },
                 _ => SgrState::Invalid,
             },
             SgrState::SetForegroundMode2ReceivedGreen { style, r, g } => match param {
@@ -149,6 +186,7 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                 _ => SgrState::Invalid,
             },
             SgrState::SetForegroundMode2Blue { style, r, g } => match param {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 CsiParam::Integer(b) => SgrState::Ready {
                     style: Style {
                         fg: Color::Rgb { r, g, b: *b as u8 },
@@ -157,15 +195,16 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                 },
                 _ => SgrState::Invalid,
             },
-            SgrState::SetForegroundMode5 { style }=> match param {
+            SgrState::SetForegroundMode5 { style } => match param {
                 CsiParam::P(b';') => SgrState::SetForegroundMode5Number { style },
                 _ => SgrState::Invalid,
             },
-            SgrState::SetForegroundMode5Number { style }=> match param {
+            SgrState::SetForegroundMode5Number { style } => match param {
                 CsiParam::Integer(n) => SgrState::Ready {
                     style: Style {
                         fg: match n {
                             16..=231 => {
+                                #[allow(clippy::cast_precision_loss)]
                                 let n = (n - 16) as f32;
                                 let r = (n / 36.0).floor();
                                 let g = ((n - (r * 36.0)) / 6.0).floor();
@@ -173,13 +212,30 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                                 let mul = 255.0 / 6.0;
 
                                 Color::Rgb {
+                                    #[allow(
+                                        clippy::cast_possible_truncation,
+                                        clippy::cast_sign_loss
+                                    )]
                                     r: (r * mul).round() as u8,
+                                    #[allow(
+                                        clippy::cast_possible_truncation,
+                                        clippy::cast_sign_loss
+                                    )]
                                     g: (g * mul).round() as u8,
+                                    #[allow(
+                                        clippy::cast_possible_truncation,
+                                        clippy::cast_sign_loss
+                                    )]
                                     b: (b * mul).round() as u8,
                                 }
                             }
                             232..=255 => {
                                 let range = 255.0 / (255.0 - 232.0);
+                                #[allow(
+                                    clippy::cast_precision_loss,
+                                    clippy::cast_possible_truncation,
+                                    clippy::cast_sign_loss
+                                )]
                                 let val = (range * (n - 232) as f32).round() as u8;
 
                                 Color::Rgb {
@@ -214,10 +270,6 @@ pub fn process(initial_style: Style, params: &[CsiParam]) -> Style {
                             },
                             6 => Color::Ansi {
                                 color: AnsiColor::Cyan,
-                                bold: false,
-                            },
-                            7 => Color::Ansi {
-                                color: AnsiColor::White,
                                 bold: false,
                             },
                             8 => Color::Ansi {

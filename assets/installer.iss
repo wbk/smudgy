@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "smudgy"
-#define MyAppVersion "beta"
+#define MyAppVersion "0.2"
 #define MyAppPublisher "walter.dev"
 #define MyAppURL "htttps://smudgy.org"
 #define MyAppExeName "smudgy.exe"
@@ -44,7 +44,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\target\release\smudgy.exe"; DestName: "smudgy.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\smudgy_ui.exe"; DestName: "smudgy.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

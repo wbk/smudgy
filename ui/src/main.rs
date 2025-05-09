@@ -1,214 +1,263 @@
-#![allow(clippy::pedantic)] // TODO: Remove this later
-use iced::{Element, Theme, Task, Color, Length, Font};
-use iced::widget::{column, container, text, stack, opaque, mouse_area, center, row};
-use iced::{Size, window}; // Import Settings, Size, and window
-use iced::alignment::{Horizontal, Vertical};
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(clippy::pedantic)]
+use std::collections::BTreeMap;
+use std::ops::Deref;
+use std::sync::Arc;
 
-// Load custom fonts
-const GEIST_VF_BYTES: &[u8] = include_bytes!("../../assets/fonts/GeistVF.ttf");
-const GEIST_VF: Font = Font::with_name("Geist");
-const GEIST_MONO_VF_BYTES: &[u8] = include_bytes!("../../assets/fonts/GeistMonoVF.ttf");
+use futures::StreamExt;
+use iced::daemon::Title;
+use iced::futures::FutureExt;
+use iced::widget::{center, text};
+use iced::window;
+use iced::window::settings::PlatformSpecific;
+use iced::{Size, Subscription, Task, futures};
+use theme::Element;
 
-mod toolbar;
+// Core session imports
+use windows::script_editor_window::{self, Event as ScriptEditorWindowEvent, ScriptEditorWindow};
+use windows::smudgy_window::SmudgyWindow;
+
+mod assets;
 mod modal;
-mod session_pane;
-mod session_input;
+mod theme;
+mod toolbar;
+mod widgets;
+
+mod components;
+
+mod windows {
+    pub mod map_editor_window;
+    pub mod script_editor_window;
+    pub mod settings_window;
+    pub mod smudgy_window;
+}
+
+mod helpers {
+    pub mod hotkeys;
+}
+
+use windows::smudgy_window::Event as SmudgyWindowEvent;
+
+use crate::components::session_pane;
+use crate::windows::smudgy_window;
 
 extern crate log;
 
-#[derive(Default)]
+pub type Theme = crate::theme::Theme;
+pub type Renderer = iced::Renderer;
+
+// Main application state
 struct Smudgy {
-    toolbar_expanded: bool,
-    modal: Option<modal::Modal>, // Store the active modal state
-    sessions: Vec<session_pane::SessionPane>, // Store active sessions
+    smudgy_windows: BTreeMap<window::Id, SmudgyWindow>,
+    script_editor_windows: BTreeMap<window::Id, ScriptEditorWindow>,
+}
+
+impl Default for Smudgy {
+    fn default() -> Self {
+        Self {
+            smudgy_windows: BTreeMap::new(),
+            script_editor_windows: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    ToolbarAction(toolbar::Action),
-    ModalMessage(modal::Message), // Wrap modal-specific messages
-    ModalEvent(modal::Event),     // Wrap modal-specific events
-    CloseModal,                   // Explicit message to close the modal
-    SessionMessage(usize, session_pane::Message), // Session index and message
+    CloseWindow(window::Id),
+    SmudgyWindowMessage(window::Id, windows::smudgy_window::Message),
+    NewSmudgyWindow(window::Id),
+    CreateSmudgyWindow,
+    ScriptEditorWindowMessage(window::Id, windows::script_editor_window::Message),
+    NewScriptEditorWindow {
+        id: window::Id,
+        server_name: Arc<String>,
+    },
+    CreateScriptEditorWindow {
+        server_name: Arc<String>,
+    },
 }
 
-// Application starts with no modal and no initial task
-fn init() -> (Smudgy, Task<Message>) { // Accept flags
-    (Smudgy {
-        toolbar_expanded: true,
-        modal: None,
-        sessions: Vec::new(),
-    }, Task::none())
+fn init() -> (Smudgy, Task<Message>) {
+    let (_id, open) = window::open(window::Settings {
+        exit_on_close_request: true,
+        ..Default::default()
+    });
+
+    (
+        Smudgy {
+            smudgy_windows: BTreeMap::new(),
+            script_editor_windows: BTreeMap::new(),
+        },
+        open.map(Message::NewSmudgyWindow),
+    )
 }
 
- fn main() -> anyhow::Result<()> {
-
+fn main() -> anyhow::Result<()> {
     smudgy_core::init();
 
-    iced::application("smudgy", update, view)
-        .theme(|_s| theme())
-        .font(GEIST_VF_BYTES) // Set the default font bytes
-        .font(GEIST_MONO_VF_BYTES) // Load the mono font bytes
-        .default_font(GEIST_VF) // Set the default font family
-        .window(window::Settings {
-            min_size: Some(Size::new(600.0, 400.0)), // Set minimum size
-            ..window::Settings::default()
+    iced::daemon(init, update, view)
+        .theme(|smudgy, window_id| {
+            if smudgy.smudgy_windows.contains_key(&window_id) {
+                theme::smudgy()
+            } else {
+                theme::secondary()
+            }
         })
-        .run_with(init)?;
-    
-    log::info!("exiting");
+        .subscription(subscription)
+        .font(assets::fonts::GEIST_VF_BYTES)
+        .font(assets::fonts::GEIST_MONO_VF_BYTES)
+        .font(assets::fonts::BOOTSTRAP_ICONS_BYTES)
+        .default_font(assets::fonts::GEIST_VF)
+        .title(|smudgy: &Smudgy, window_id: window::Id| {
+            match smudgy.script_editor_windows.get(&window_id) {
+                Some(window) => {
+                    format!("smudgy automations - {}", window.server_name())
+                }
+                None => {
+                    "smudgy".to_string()
+                }
+            }
+        })
+        .run()?;
+
+    log::info!("Application closing");
+
+    smudgy_core::session::runtime::join_runtime_threads();
+
     Ok(())
+}
+
+fn subscription(smudgy: &Smudgy) -> Subscription<Message> {
+    Subscription::batch([
+        Subscription::batch(
+            smudgy
+                .smudgy_windows
+                .iter()
+                .map(|(id, window)| window.subscription().with(*id)),
+        )
+        .map(|(id, msg)| Message::SmudgyWindowMessage(id, msg)),
+        window::close_events().map(Message::CloseWindow),
+    ])
 }
 
 fn update(smudgy: &mut Smudgy, message: Message) -> Task<Message> {
     match message {
-        Message::ToolbarAction(action) => match action {
-            toolbar::Action::ToggleExpand => {
-                smudgy.toolbar_expanded = !smudgy.toolbar_expanded;
-                Task::none()
-            }
-            toolbar::Action::ConnectPressed => {
-                // Create and store the connect modal state
-                let connect_state = modal::connect::State::default();
-                let new_modal = modal::Modal::Connect(connect_state);
-                // Get the initial task from the modal logic
-                let modal_init_task: Task<modal::Message> = new_modal.initial_task(); 
-                smudgy.modal = Some(new_modal);
-                // Map the modal's task message to the main Message type
-                modal_init_task.map(Message::ModalMessage)
-            }
-            toolbar::Action::SettingsPressed => {
-                println!("Settings button pressed!");
-                // TODO: Open settings modal
-                Task::none()
-            }
-            toolbar::Action::AutomationsPressed => {
-                println!("Automations button pressed!");
-                // TODO: Open automations modal
-                Task::none()
-            }
-        },
-        // Route modal messages to the active modal's update function
-        Message::ModalMessage(msg) => {
-            if let Some(m) = smudgy.modal.as_mut() {
-                let (task, event) = m.update(msg);
-                
-                // If we have an event, handle it immediately
-                if let Some(evt) = event {
-                    return update(smudgy, Message::ModalEvent(evt));
+        Message::CloseWindow(id) => {
+            if smudgy.smudgy_windows.get(&id).is_some() {
+                smudgy.smudgy_windows.remove(&id);
+                if smudgy.smudgy_windows.is_empty() {
+                    iced::exit()
+                } else {
+                    Task::none()
                 }
-                
-                // Otherwise return the mapped task
-                task.map(Message::ModalMessage)
+            } else if smudgy.script_editor_windows.get(&id).is_some() {
+                smudgy.script_editor_windows.remove(&id);
+                Task::none()
             } else {
                 Task::none()
             }
         }
-        // Handle events emitted by the modal
-        Message::ModalEvent(event) => match event {
-            modal::Event::Connect(connect_event) => match connect_event {
-                modal::ConnectEvent::CloseModalRequested => {
-                    smudgy.modal = None;
-                    Task::none()
-                }
-                modal::ConnectEvent::Connect(server_name, profile_name) => {
-                    println!("Connect requested for {profile_name} on {server_name}");
-                    
-                    // Create a new session and add it to the sessions list
-                    let new_session = session_pane::SessionPane::new(server_name, profile_name);
-                    smudgy.sessions.push(new_session);
-                    
-                    smudgy.modal = None; // Close modal on connect
-                    // TODO: Implement actual connection logic
-                    Task::none()
-                }
-            }
-        },
-        Message::CloseModal => {
-             smudgy.modal = None;
-             Task::none()
-        },
-        Message::SessionMessage(session_idx, session_msg) => {
-            if let Some(session) = smudgy.sessions.get_mut(session_idx) {
-                let session_task = session.update(session_msg.clone());
-                
-                // Handle special cases that require app-level changes
-                match session_msg {
-                    session_pane::Message::Close => {
-                        // Remove the session when closed
-                        if session_idx < smudgy.sessions.len() {
-                            smudgy.sessions.remove(session_idx);
-                        }
-                        Task::none()
+        Message::SmudgyWindowMessage(id, msg) => {
+            if let Some(window) = smudgy.smudgy_windows.get_mut(&id) {
+                let update = window.update(msg);
+
+                match update.event {
+                    Some(SmudgyWindowEvent::CreateNewScriptEditorWindow { server_name }) => {
+                        Task::batch([
+                            update
+                                .task
+                                .map(move |message| Message::SmudgyWindowMessage(id, message)),
+                            Task::done(Message::CreateScriptEditorWindow { server_name }),
+                        ])
                     }
-                    _ => {
-                        // Map the session task to main Message type
-                        session_task.map(move |msg| Message::SessionMessage(session_idx, msg))
-                    }
+                    _ => update
+                        .task
+                        .map(move |message| Message::SmudgyWindowMessage(id, message)),
                 }
             } else {
+                log::warn!("Received message for unknown window index: {}", id);
                 Task::none()
             }
+        }
+        Message::CreateSmudgyWindow => {
+            let (_, task) = window::open(window::Settings::default());
+            task.map(Message::NewSmudgyWindow)
+        }
+        Message::NewSmudgyWindow(id) => {
+            smudgy
+                .smudgy_windows
+                .insert(id, windows::smudgy_window::SmudgyWindow::new());
+            Task::none()
+        }
+        Message::ScriptEditorWindowMessage(id, msg) => {
+            if let Some(window) = smudgy.script_editor_windows.get_mut(&id) {
+                let update = window
+                    .update(msg)
+                    .map_message(move |msg| Message::ScriptEditorWindowMessage(id, msg));
+
+                match update.event {
+                    Some(ScriptEditorWindowEvent::ScriptsChanged { server_name }) => {
+                        let reload_tasks = smudgy.smudgy_windows.iter().flat_map(|(id, window)| {
+                            window.session_panes().iter().filter_map(|pane| {
+                                if pane.server_name == server_name {
+                                    Some(Task::done(Message::SmudgyWindowMessage(
+                                        *id,
+                                        smudgy_window::Message::SessionPaneUserAction {
+                                            session_id: pane.id,
+                                            msg: session_pane::Message::Reload,
+                                        },
+                                    )))
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                        Task::batch([update.task, Task::batch(reload_tasks)])
+                    }
+                    None => update.task,
+                }
+            } else {
+                log::warn!("Received message for unknown window index: {}", id);
+                Task::none()
+            }
+        }
+        Message::CreateScriptEditorWindow { server_name } => {
+            let (_, task) = window::open(window::Settings {
+                min_size: Some(Size::new(600.0, 400.0)),
+                ..Default::default()
+            });
+            task.map(move |id| Message::NewScriptEditorWindow {
+                id,
+                server_name: server_name.clone(),
+            })
+        }
+        Message::NewScriptEditorWindow { id, server_name } => {
+            let window = ScriptEditorWindow::new(server_name.to_string());
+            let task = window.init();
+            smudgy.script_editor_windows.insert(id, window);
+
+            task.map(move |message| Message::ScriptEditorWindowMessage(id, message))
         }
     }
 }
 
-fn view(smudgy: &Smudgy) -> Element<Message> {
-    let toolbar_element = toolbar::view(smudgy.toolbar_expanded);
-
-    // Create the session view
-    let main_content_area: Element<Message> = if smudgy.sessions.is_empty() {
-        // If no sessions, show placeholder
-        container(text("no active sessions").font(GEIST_VF))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .into()
-    } else {
-        // Map session views to our main message type
-        row(
-            smudgy.sessions
-                .iter()
-                .enumerate()
-                .map(|(idx, session)| {
-                    session.view().map(move |msg| Message::SessionMessage(idx, msg))
-                })
-                .collect::<Vec<_>>()
+fn view(smudgy: &Smudgy, id: window::Id) -> Element<Message> {
+    if let Some(window) = smudgy.smudgy_windows.get(&id) {
+        center(
+            window
+                .view()
+                .map(move |message| Message::SmudgyWindowMessage(id, message)),
         )
-        .spacing(10)
-        .width(Length::Fill)
-        .height(Length::Fill)
         .into()
-    };
-
-    let main_layout: Element<_> = column![toolbar_element, main_content_area] // Toolbar first, then content
-        .width(Length::Fill)
-        .height(Length::Fill)
-        // Remove centering from the column itself
-        .into();
-
-    // If a modal is active, overlay its view
-    if let Some(modal) = &smudgy.modal {
-        let modal_view = modal.view().map(Message::ModalMessage); // Map modal messages
-
-        stack(vec![
-            main_layout, 
-            opaque(mouse_area(center(opaque(modal_view)).style(|_theme| {
-                container::Style {
-                    background: Some(Color { a: 0.8, ..Color::BLACK }.into()),
-                    ..container::Style::default()
-                }
-            }))
-            // Pressing the background sends the explicit CloseModal message
-            .on_press(Message::CloseModal)),
-        ])
+    } else if let Some(window) = smudgy.script_editor_windows.get(&id) {
+        center(
+            window
+                .view()
+                .map(move |message| Message::ScriptEditorWindowMessage(id, message)),
+        )
         .into()
     } else {
-        main_layout
+        text("No windows open").into()
     }
-}
-
-fn theme() -> Theme {
-    Theme::Oxocarbon
 }

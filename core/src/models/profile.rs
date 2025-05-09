@@ -1,11 +1,11 @@
-// Models related to profile configurations 
+// Models related to profile configurations
 
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use validator::Validate;
 use crate::get_smudgy_home;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::{fs, io};
+use validator::Validate;
 
 /// Represents the configuration for a single profile within a server.
 /// This struct is serialized to/from `profile.json` within the profile's directory.
@@ -382,4 +382,4 @@ pub fn delete_profile(server_name: &str, profile_name: &str) -> Result<()> {
     }
 
     Ok(())
-} 
+}

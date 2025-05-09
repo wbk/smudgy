@@ -4,10 +4,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use vtparse::{CsiParam, VTActor};
 
 use crate::session::{
-        runtime::RuntimeAction,
-        styled_line::{VtSpan, Style},
-        styled_line::StyledLine,
-    };
+    runtime::RuntimeAction,
+    styled_line::StyledLine,
+    styled_line::{Style, VtSpan},
+};
 
 mod sgr;
 pub use sgr::{AnsiColor, Color};
@@ -24,6 +24,7 @@ pub struct VtProcessor {
 const INPUT_BUFFER_CAPACITY: usize = 1024;
 
 impl VtProcessor {
+    #[must_use]
     pub fn new(session_runtime_tx: UnboundedSender<RuntimeAction>) -> Self {
         VtProcessor {
             cursor_style: Style {
@@ -31,7 +32,7 @@ impl VtProcessor {
                     color: AnsiColor::White,
                     bold: false,
                 },
-                bg: Color::DefaultBackground
+                bg: Color::DefaultBackground,
             },
             buf: String::with_capacity(INPUT_BUFFER_CAPACITY),
             buf_raw: Vec::with_capacity(INPUT_BUFFER_CAPACITY),
@@ -58,6 +59,13 @@ impl VtProcessor {
         StyledLine::new_with_raw(&self.buf, self.span_info.drain(..).collect(), &self.buf_raw)
     }
 
+    /// Notifies that the end of a buffer of incoming data has been reached.
+    ///
+    /// This finalizes any pending partial line and sends it, then requests a repaint.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `session_runtime_tx` channel is closed (i.e., the session runtime has been dropped).
     pub fn notify_end_of_buffer(&mut self) {
         let pending_line = Arc::new(self.consume_into_pending_line());
         if !self.buf.is_empty() {

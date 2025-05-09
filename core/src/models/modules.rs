@@ -47,18 +47,24 @@ pub fn list_modules(server_name: &str) -> Result<Vec<ModuleFile>> {
                                     });
                                 } else {
                                     // Log or handle non-UTF8 filenames if necessary
-                                    eprintln!("Warning: Skipping module file with non-UTF8 name in server '{server_name}': {path:?}");
+                                    eprintln!(
+                                        "Warning: Skipping module file with non-UTF8 name in server '{server_name}': {path:?}"
+                                    );
                                 }
                             } else {
                                 // Path terminates in .. or similar? Should be rare for files.
-                                eprintln!("Warning: Skipping module file with no filename component in server '{server_name}': {path:?}");
+                                eprintln!(
+                                    "Warning: Skipping module file with no filename component in server '{server_name}': {path:?}"
+                                );
                             }
                         }
                         // Ignore directories within the modules folder for now
                     }
                     Err(e) => {
                         // Log warning: Failed to read directory entry
-                        eprintln!("Warning: Failed to read directory entry in modules for server '{server_name}': {e}");
+                        eprintln!(
+                            "Warning: Failed to read directory entry in modules for server '{server_name}': {e}"
+                        );
                     }
                 }
             }
@@ -78,4 +84,4 @@ pub fn list_modules(server_name: &str) -> Result<Vec<ModuleFile>> {
     }
 
     Ok(module_files)
-} 
+}

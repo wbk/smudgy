@@ -1,22 +1,14 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{session::styled_line::StyledLine, session::runtime::RuntimeAction};
+use crate::session::{runtime::{script_engine::{FunctionId, ScriptId}, RuntimeAction}, styled_line::StyledLine};
+use super::ScriptAction;
 
 // limit regex size to 512MB
 const MAX_REGEX_SIZE: usize = 512 * 1024 * 1024;
-
-#[derive(Clone, Debug)]
-pub enum Action {
-    Noop,
-    SendRaw(Arc<String>),
-    ProcessScript(Arc<String>),
-    EvalJavascript(usize),
-    CallJavascriptFunction(usize),
-}
 
 #[derive(Debug)]
 pub struct Manager {
@@ -58,7 +50,7 @@ pub struct PushTriggerParams<'a> {
     pub patterns: &'a Arc<Vec<String>>,
     pub raw_patterns: &'a Arc<Vec<String>>,
     pub anti_patterns: &'a Arc<Vec<String>>,
-    pub action: Action,
+    pub action: ScriptAction,
     pub prompt: bool,
     pub enabled: bool,
 }
@@ -118,8 +110,7 @@ impl Manager {
     fn add_or_update_trigger(&mut self, trigger: Trigger) {
         trace!(
             "Adding or updating trigger: {:?}, {:?}",
-            trigger.name,
-            trigger.patterns
+            trigger.name, trigger.patterns
         );
         if let Some(index) = self.trigger_indices.get(&trigger.name) {
             *self.triggers.get_mut(*index).unwrap() = trigger;
@@ -136,12 +127,12 @@ impl Manager {
         &mut self,
         name: &Arc<String>,
         patterns: &Arc<Vec<String>>,
-        script_id: usize,
+        script_id: ScriptId,
     ) -> Result<()> {
         self.add_or_update_alias(Trigger::new_alias(
             name.to_string(),
             patterns.iter(),
-            Action::EvalJavascript(script_id),
+            ScriptAction::EvalJavascript(script_id),
         )?);
         Ok(())
     }
@@ -163,12 +154,12 @@ impl Manager {
         &mut self,
         name: Arc<String>,
         patterns: Arc<Vec<String>>,
-        function_id: usize,
+        function_id: FunctionId,
     ) -> Result<()> {
         self.add_or_update_alias(Trigger::new_alias(
             name.to_string(),
             patterns.iter(),
-            Action::CallJavascriptFunction(function_id),
+            ScriptAction::CallJavascriptFunction(function_id),
         )?);
         Ok(())
     }
@@ -182,7 +173,7 @@ impl Manager {
         self.add_or_update_alias(Trigger::new_alias(
             name.to_string(),
             patterns.iter(),
-            Action::ProcessScript(script),
+            ScriptAction::SendSimple(script),
         )?);
         Ok(())
     }
@@ -233,7 +224,7 @@ impl Manager {
         .size_limit(MAX_REGEX_SIZE)
         .build()
         .unwrap();
-    
+
         self.trigger_regex_set_map = self
             .triggers
             .iter()
@@ -348,7 +339,7 @@ impl Manager {
             })
             .collect();
 
-        println!("Time to rebuild trigger regex sets: {:?}", start.elapsed());
+        debug!("Time to rebuild trigger regex sets: {:?}", start.elapsed());
     }
 
     fn rebuild_alias_regex_set(&mut self) {
@@ -391,15 +382,17 @@ impl Manager {
         match_type: TriggerMatchType,
     ) -> Result<bool> {
         if depth > 100 {
-            bail!("Script processor bailing, depth limit reached. Do you have an alias that triggers itself?");
+            bail!(
+                "Script processor bailing, depth limit reached. Do you have an alias that triggers itself?"
+            );
         }
         let start = std::time::Instant::now();
         let matches = regex_set.matches(line);
-        println!("Time to test regex matches: {:?}", start.elapsed());
+        debug!("Time to test regex matches: {:?}", start.elapsed());
 
         let start = std::time::Instant::now();
         let matches: Vec<_> = matches.iter().collect();
-        println!("Time to collect regex matches: {:?}", start.elapsed());
+        debug!("Time to collect regex matches: {:?}", start.elapsed());
         let mut fired = false;
         if !matches.is_empty() {
             for match_indices in matches.chunk_by(|a, b| {
@@ -464,7 +457,7 @@ impl Manager {
     }
 
     pub fn process_incoming_line(&mut self, line: Arc<StyledLine>) -> Result<()> {
-        trace!("Processing incoming line: {:?}", line);
+        trace!("Processing incoming line: {line:?}");
         if self.trigger_regex_set_dirty {
             self.rebuild_trigger_regex_set();
             self.trigger_regex_set_dirty = false;
@@ -496,19 +489,16 @@ impl Manager {
         )?;
 
         let end = start.elapsed();
-        debug!(
-            "Time to match and dispatch triggers on incoming line: {:?}",
-            end
-        );
+        debug!("Time to match and dispatch triggers on incoming line: {end:?}");
 
         self.session_runtime_tx
-            .send(RuntimeAction::PassthroughCompleteLine(line))
+            .send(RuntimeAction::AddCompleteLineToBuffer(line))
             .context("Could not send incoming line to runtime")?;
         Ok(())
     }
 
     pub fn process_partial_line(&self, line: Arc<StyledLine>) -> Result<()> {
-        trace!("Processing incoming partial line: {:?}", line);
+        trace!("Processing incoming partial line: {line:?}");
         let start = Instant::now();
 
         if let Some(line) = line.raw() {
@@ -534,22 +524,21 @@ impl Manager {
         )?;
 
         let end = start.elapsed();
-        debug!(
-            "Time to match and dispatch triggers on incoming partial line: {:?}",
-            end
-        );
+        debug!("Time to match and dispatch triggers on incoming partial line: {end:?}");
 
         self.session_runtime_tx
-            .send(RuntimeAction::PassthroughPartialLine(line))
+            .send(RuntimeAction::AddPartialLineToBuffer(line))
             .context("Could not send incoming line to runtime")?;
         Ok(())
     }
 
-    pub fn request_repaint(&self) -> Result<()> {
-        self.session_runtime_tx
-            .send(RuntimeAction::RequestRepaint)
-            .context("Could not send incoming line to runtime")?;
-        Ok(())
+    pub fn clear(&mut self) {
+        self.triggers.clear();
+        self.trigger_indices.clear();
+        self.aliases.clear();
+        self.alias_indices.clear();
+        self.rebuild_trigger_regex_set();
+        self.rebuild_alias_regex_set();
     }
 }
 
@@ -559,7 +548,7 @@ struct Trigger {
     patterns: Vec<Regex>,
     raw_patterns: Vec<Regex>,
     anti_patterns: RegexSet,
-    script: Action,
+    script: ScriptAction,
     prompt: bool,
     enabled: bool,
 }
@@ -577,7 +566,7 @@ impl Trigger {
         patterns: TIterPattern,
         raw_patterns: TIterRawPattern,
         anti_patterns: TIterAntiPattern,
-        script: Action,
+        script: ScriptAction,
         prompt: bool,
         enabled: bool,
     ) -> Result<Self>
@@ -611,7 +600,7 @@ impl Trigger {
     pub fn new_alias<TIterPattern, TPatternStr>(
         name: String,
         patterns: TIterPattern,
-        script: Action,
+        script: ScriptAction,
     ) -> Result<Self>
     where
         TPatternStr: AsRef<str>,
@@ -627,6 +616,7 @@ impl Trigger {
             true,
         )
     }
+    #[allow(unreachable_code, unused_variables)]
     pub fn run(
         &self,
         line: &str,
@@ -636,7 +626,7 @@ impl Trigger {
         depth: u32,
     ) -> Result<Option<Vec<String>>> {
         let pattern = match match_type {
-            TriggerMatchType::Normal=> self.patterns.get(pattern_idx).unwrap(),
+            TriggerMatchType::Normal => self.patterns.get(pattern_idx).unwrap(),
             TriggerMatchType::Raw => self.raw_patterns.get(pattern_idx).unwrap(),
         };
         let mut i = 0;
@@ -646,8 +636,8 @@ impl Trigger {
                 .zip(pattern.captures(line).unwrap().iter())
                 .map(|(k, v)| {
                     let pair = (
-                        k.map_or_else(|| format!("${i}"),ToString::to_string),
-                        v.map_or_else(|| String::new(), |m| m.as_str().to_string())
+                        k.map_or_else(|| format!("${i}"), ToString::to_string),
+                        v.map_or_else(String::new, |m| m.as_str().to_string()),
                     );
                     i += 1;
                     pair
@@ -656,27 +646,25 @@ impl Trigger {
         );
 
         match self.script {
-            Action::EvalJavascript(script_id) => {
-                // runtime_action_tx.send(RuntimeAction::EvalJavascriptAlias(
-                //     Arc::new(line.to_string()),
-                //     script_id,
-                //     captures,
-                //     depth,
-                // ))?;
-                todo!();
+            ScriptAction::EvalJavascript(script_id) => {
+                runtime_action_tx.send(RuntimeAction::EvalJavascript {
+                    id: script_id,
+                    depth,
+                    matches: captures,
+                })?;
+
+                Ok(None)
+           }
+            ScriptAction::CallJavascriptFunction(function_id) => {
+                runtime_action_tx.send(RuntimeAction::CallJavascriptFunction {
+                    id: function_id,
+                    depth,
+                    matches: captures
+                })?;
+
                 Ok(None)
             }
-            Action::CallJavascriptFunction(function_id) => {
-                // runtime_action_tx.send(RuntimeAction::EvalJavascriptFunctionAlias(
-                //     Arc::new(line.to_string()),
-                //     function_id,
-                //     captures,
-                //     depth,
-                // ))?;
-                todo!();
-                Ok(None)
-            }
-            Action::ProcessScript(ref script) => {
+            ScriptAction::SendSimple(ref script) => {
                 let mut evaluated = String::clone(script);
                 captures.iter().for_each(|(k, v)| {
                     evaluated = evaluated.replace(k, v);
@@ -689,11 +677,11 @@ impl Trigger {
                         .collect(),
                 ))
             }
-            Action::SendRaw(ref script) => {
+            ScriptAction::SendRaw(ref script) => {
                 runtime_action_tx.send(RuntimeAction::SendRaw(script.clone()))?;
                 Ok(None)
             }
-            Action::Noop => Ok(None),
+            ScriptAction::Noop => Ok(None),
         }
     }
 
