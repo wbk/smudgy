@@ -6,6 +6,7 @@ use iced::{
     widget::{center, column, container, mouse_area, opaque, row, stack, text, text_input},
 };
 use smudgy_core::session::{SessionId, TaggedSessionEvent};
+use smudgy_map::{AreaId, Mapper};
 
 use crate::{
     assets,
@@ -32,6 +33,8 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub enum Event {
     CreateNewScriptEditorWindow { server_name: Arc<String> },
+    CreateNewMapEditorWindow { mapper: Mapper },
+    SelectMapperArea(AreaId),
 }
 
 pub struct SmudgyWindow {
@@ -78,16 +81,16 @@ impl SmudgyWindow {
         let session_subscriptions = Subscription::batch(
             self.session_panes
                 .iter()
-                .map(|session| session.session_subscription().map(Message::SessionEvent))
+                .map(|session| session.session_subscription().map(Message::SessionEvent)),
         );
-        
+
         session_subscriptions
     }
 
     /// Set the active session, deactivating all others
     pub fn set_active_session(&mut self, session_id: SessionId) -> Task<Message> {
         self.active_session_id = Some(session_id);
-        
+
         // Find the session and get its unique input ID
         if let Some(session) = self.session_panes.iter().find(|s| s.id == session_id) {
             let input_id = session.input.input_id();
@@ -118,12 +121,41 @@ impl SmudgyWindow {
                 toolbar::Message::AutomationsPressed => {
                     // Only allow automation actions when there's an active session
                     if let Some(active_id) = self.active_session_id {
-                        if let Some(active_session) = self.session_panes.iter().find(|s| s.id == active_id) {
-                            Update::with_event(Event::CreateNewScriptEditorWindow { 
-                                server_name: Arc::new(active_session.server_name.clone()) 
+                        if let Some(active_session) =
+                            self.session_panes.iter().find(|s| s.id == active_id)
+                        {
+                            Update::with_event(Event::CreateNewScriptEditorWindow {
+                                server_name: Arc::new(active_session.server_name.clone()),
                             })
                         } else {
-                            log::warn!("Active session ID {} not found in session panes", active_id);
+                            log::warn!(
+                                "Active session ID {} not found in session panes",
+                                active_id
+                            );
+                            Update::none()
+                        }
+                    } else {
+                        log::info!("AutomationsPressed ignored - no active session");
+                        Update::none()
+                    }
+                }
+                toolbar::Message::MapEditorPressed => {
+                    if let Some(active_id) = self.active_session_id {
+                        if let Some(active_session) =
+                            self.session_panes.iter().find(|s| s.id == active_id)
+                        {
+                            active_session
+                                .mapper
+                                .as_ref()
+                                .map(|mapper| {
+                                    Update::with_event(Event::CreateNewMapEditorWindow { mapper: mapper.clone() })
+                                })
+                                .unwrap_or_else(|| Update::none())
+                        } else {
+                            log::warn!(
+                                "Active session ID {} not found in session panes",
+                                active_id
+                            );
                             Update::none()
                         }
                     } else {
@@ -155,14 +187,11 @@ impl SmudgyWindow {
                         let session_id = self.next_session_id;
                         self.next_session_id = self.next_session_id + 1.into();
 
-                        let new_session = session_pane::SessionPane::new(
-                            session_id,
-                            server_name,
-                            profile_name,
-                        );
-                        
+                        let new_session =
+                            session_pane::SessionPane::new(session_id, server_name, profile_name);
+
                         self.session_panes.push(new_session);
-                        
+
                         // Set this as the active session (will deactivate others)
                         let focus_task = self.set_active_session(session_id);
 
@@ -189,14 +218,14 @@ impl SmudgyWindow {
                     // Handle special cases from pane messages, e.g., Close
                     if let session_pane::Message::Close = msg {
                         log::info!("Closing session with id: {}", session_id);
-                        
+
                         // If we're closing the active session, clear the active session
                         if self.active_session_id == Some(session_id) {
                             self.active_session_id = None;
                         }
-                        
+
                         self.session_panes.retain(|s| s.id != session_id);
-                        
+
                         // If there are remaining sessions and no active session, activate the first one
                         if self.active_session_id.is_none() && !self.session_panes.is_empty() {
                             let first_session_id = self.session_panes[0].id;
@@ -205,6 +234,9 @@ impl SmudgyWindow {
                         } else {
                             Update::none()
                         }
+                    } else if let session_pane::Message::SelectMapperArea(area_id) = msg {
+                        // Handle the SelectMapperArea message that bubbles up from session inputs
+                        Update::with_event(Event::SelectMapperArea(area_id))
                     } else {
                         // Handle the Activate message that bubbles up from session inputs
                         if let session_pane::Message::Activate = msg {

@@ -2,6 +2,7 @@ use iced::{Task, advanced::graphics::futures::MaybeSend};
 
 pub mod session_input;
 pub mod session_pane;
+pub mod map_view;
 
 pub struct Update<Message, Event> {
     pub task: Task<Message>,

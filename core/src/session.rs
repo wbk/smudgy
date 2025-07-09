@@ -1,11 +1,12 @@
 use iced::futures::{channel::mpsc::Sender, SinkExt, Stream, StreamExt};
 use runtime::RuntimeAction;
+use smudgy_map::{AreaId, Mapper};
 use std::{fmt::Debug, sync::Arc};
 use styled_line::StyledLine;
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use derive_more::{Add, From, Into, Display};
 
-use crate::models::hotkeys::HotkeyDefinition;
+use crate::{models::hotkeys::HotkeyDefinition, session::runtime::line_operation::LineOperation};
 
 pub mod connection;
 pub mod registry;
@@ -25,6 +26,8 @@ pub enum SessionEvent {
     ClearHotkeys,
     RegisterHotkey(HotkeyId, HotkeyDefinition),
     UnregisterHotkey(HotkeyId),
+    PerformLineOperation { line_number: usize, operation: LineOperation },
+    SelectMapperArea(AreaId),
 }
 #[derive(Debug, Clone)]
 pub struct TaggedSessionEvent {
@@ -37,6 +40,7 @@ pub struct SessionParams {
     pub server_name: Arc<String>,
     pub profile_name: Arc<String>,
     pub profile_subtext: Arc<String>,
+    pub mapper: Option<Mapper>,
 }
 
 #[derive(Display, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -52,7 +56,7 @@ impl std::hash::Hash for SessionParams {
 #[derive(Debug)]
 pub enum BufferUpdate {
     Append(Arc<StyledLine>),
-    NewLine,
+    EnsureNewLine,
 }
 
 pub fn spawn(params: Arc<SessionParams>) -> impl Stream<Item = TaggedSessionEvent> {
@@ -74,6 +78,7 @@ pub fn spawn(params: Arc<SessionParams>) -> impl Stream<Item = TaggedSessionEven
             params.server_name.clone(),
             params.profile_name.clone(),
             params.profile_subtext.clone(),
+            params.mapper.clone(),
             ui_tx.clone(),
         );
 

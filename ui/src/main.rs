@@ -11,6 +11,7 @@ use iced::widget::{center, text};
 use iced::window;
 use iced::window::settings::PlatformSpecific;
 use iced::{Size, Subscription, Task, futures};
+use smudgy_map::{AreaId, Mapper};
 use theme::Element;
 
 // Core session imports
@@ -39,6 +40,7 @@ mod helpers {
 use windows::smudgy_window::Event as SmudgyWindowEvent;
 
 use crate::components::session_pane;
+use crate::windows::map_editor_window::{self, MapEditorWindow};
 use crate::windows::smudgy_window;
 
 extern crate log;
@@ -50,6 +52,7 @@ pub type Renderer = iced::Renderer;
 struct Smudgy {
     smudgy_windows: BTreeMap<window::Id, SmudgyWindow>,
     script_editor_windows: BTreeMap<window::Id, ScriptEditorWindow>,
+    map_editor_windows: BTreeMap<window::Id, MapEditorWindow>,
 }
 
 impl Default for Smudgy {
@@ -57,6 +60,7 @@ impl Default for Smudgy {
         Self {
             smudgy_windows: BTreeMap::new(),
             script_editor_windows: BTreeMap::new(),
+            map_editor_windows: BTreeMap::new(),
         }
     }
 }
@@ -75,6 +79,15 @@ enum Message {
     CreateScriptEditorWindow {
         server_name: Arc<String>,
     },
+    MapEditorWindowMessage(window::Id, windows::map_editor_window::Message),
+    NewMapEditorWindow {
+        id: window::Id,
+        mapper: Mapper,
+    },
+    CreateMapEditorWindow {
+        mapper: Mapper,
+    },
+    SelectMapperArea(AreaId),
 }
 
 fn init() -> (Smudgy, Task<Message>) {
@@ -87,6 +100,7 @@ fn init() -> (Smudgy, Task<Message>) {
         Smudgy {
             smudgy_windows: BTreeMap::new(),
             script_editor_windows: BTreeMap::new(),
+            map_editor_windows: BTreeMap::new(),
         },
         open.map(Message::NewSmudgyWindow),
     )
@@ -170,6 +184,22 @@ fn update(smudgy: &mut Smudgy, message: Message) -> Task<Message> {
                             Task::done(Message::CreateScriptEditorWindow { server_name }),
                         ])
                     }
+                    Some(SmudgyWindowEvent::CreateNewMapEditorWindow { mapper }) => {
+                        Task::batch([
+                            update
+                                .task
+                                .map(move |message| Message::SmudgyWindowMessage(id, message)),
+                            Task::done(Message::CreateMapEditorWindow { mapper }),
+                        ])
+                    }
+                    Some(SmudgyWindowEvent::SelectMapperArea(area_id)) => {
+                        Task::batch([
+                            update
+                                .task
+                                .map(move |message| Message::SmudgyWindowMessage(id, message)),
+                            Task::done(Message::SelectMapperArea(area_id)),
+                        ])
+                    }
                     _ => update
                         .task
                         .map(move |message| Message::SmudgyWindowMessage(id, message)),
@@ -239,6 +269,42 @@ fn update(smudgy: &mut Smudgy, message: Message) -> Task<Message> {
 
             task.map(move |message| Message::ScriptEditorWindowMessage(id, message))
         }
+        Message::MapEditorWindowMessage(id, msg) => {
+            if let Some(window) = smudgy.map_editor_windows.get_mut(&id) {
+                let update = window
+                    .update(msg)
+                    .map_message(move |msg| Message::MapEditorWindowMessage(id, msg));
+
+                // match update.event {
+                // }
+                update.task
+            } else {
+                log::warn!("Received message for unknown window index: {}", id);
+                Task::none()
+            }
+        }
+        Message::CreateMapEditorWindow { mapper } => {
+            let (_, task) = window::open(window::Settings {
+                min_size: Some(Size::new(600.0, 400.0)),
+                ..Default::default()
+            });
+            task.map(move |id| Message::NewMapEditorWindow {
+                id,
+                mapper: mapper.clone(),
+            })
+        }
+        Message::NewMapEditorWindow { id, mapper } => {
+            let window = MapEditorWindow::new( mapper );
+            smudgy.map_editor_windows.insert(id, window);
+            Task::none()
+        }
+        Message::SelectMapperArea(area_id) => {
+            // We shamelessly drop any response on this message in particular
+            for (id, window) in smudgy.map_editor_windows.iter_mut() {
+                    window.update(map_editor_window::Message::SelectArea(area_id));
+            }
+            Task::none()
+        }
     }
 }
 
@@ -255,6 +321,13 @@ fn view(smudgy: &Smudgy, id: window::Id) -> Element<Message> {
             window
                 .view()
                 .map(move |message| Message::ScriptEditorWindowMessage(id, message)),
+        )
+        .into()
+    } else if let Some(window) = smudgy.map_editor_windows.get(&id) {
+        center(
+            window
+                .view()
+                .map(move |message| Message::MapEditorWindowMessage(id, message)),
         )
         .into()
     } else {

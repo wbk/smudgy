@@ -2,27 +2,13 @@ use crate::get_smudgy_home;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, io};
-
-/// Represents the user's theme choice in a serializable way.
-/// The actual `iced::Theme` is derived from this in the UI layer.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")] // Use "light", "dark", etc. in JSON
-#[derive(Default)]
-pub enum ThemeChoice {
-    Light,
-    #[default]
-    Dark,
-    TokyoNight,
-}
-
 /// Represents the global application settings.
 ///
 /// Loaded from / saved to `settings.json` in the main smudgy config directory.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
-    /// The selected UI theme.
-    #[serde(default)]
-    pub theme: ThemeChoice,
+    /// The api key for smudgy.org
+    pub api_key: Option<String>,
     /// The maximum number of lines to keep in the scrollback buffer.
     #[serde(default = "default_scrollback_length")]
     pub scrollback_length: usize,
@@ -36,7 +22,7 @@ fn default_scrollback_length() -> usize {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            theme: ThemeChoice::default(),
+            api_key: None,
             scrollback_length: default_scrollback_length(),
         }
     }

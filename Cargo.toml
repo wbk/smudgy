@@ -1,9 +1,10 @@
 [workspace]
-members = ["ui", "core"]
+members = ["ui", "core", "map"]
 resolver = "2"
 
 # Define shared dependencies for the workspace
 [workspace.dependencies]
+arc-swap = { version = "1.7.1", features = ["weak"] }
 anyhow = "1.0.98"
 iced = { git = "https://github.com/wbk/iced", rev = "983aafb24b7b5bfa95eab1efc38e9eb928137b27", features = [
     "tokio",
@@ -11,6 +12,7 @@ iced = { git = "https://github.com/wbk/iced", rev = "983aafb24b7b5bfa95eab1efc38
     "web-colors",
     "highlighter",
     "advanced",
+    "canvas",
 ] }
 derive_more = { version = "2.0.1", features = [
     "display",
@@ -27,13 +29,16 @@ cfg-if = "1.0.0"
 regex = "1"
 hyperscan = "0.3.2"
 smudgy_core = { path = "./core" }
+smudgy_map = { path = "./map", features = ["cloud"] }
 tokio = { version = "1.44.2", features = ["full"] }
+parking_lot = "0.12.1"
 pretty_env_logger = "0.5.0"
 log = { version = "0.4.27", features = ["max_level_info"] }
 vtparse = "0.7.0"
 deno_core = { version = "^0.347.0", features = [
     "unsafe_use_unprotected_platform",
 ] }
+deno_error = "=0.5.6"
 rustyscript = { git = "https://github.com/wbk/rustyscript", branch = "master", features = [
     "broadcast_channel",
     "cache",
@@ -62,3 +67,7 @@ pedantic = "warn"
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[profile.release-full]
+inherits = "release"
+lto = true

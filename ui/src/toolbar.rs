@@ -9,6 +9,7 @@ pub enum Message {
     ConnectPressed,
     SettingsPressed,
     AutomationsPressed,
+    MapEditorPressed,
     ToggleExpand,
     // Future: DisconnectPressed, ReconnectPressed
 }
@@ -47,6 +48,8 @@ pub fn view(expanded: bool, session_context: &SessionContext) -> Element<'static
         if session_context.has_active_session {
             let automations_button = button("Automations").on_press(Message::AutomationsPressed);
             buttons.push(automations_button.into());
+            let map_editor_button = button("Map Editor").on_press(Message::MapEditorPressed);
+            buttons.push(map_editor_button.into());
             
             // Future: Add disconnect/reconnect buttons based on connection state
             // if session_context.is_connected {

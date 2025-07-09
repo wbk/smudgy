@@ -35,7 +35,7 @@ pub struct Manager {
     trigger_regex_set_dirty: bool,
 }
 
-fn line_splitter(ch: char) -> bool {
+pub fn line_splitter(ch: char) -> bool {
     ch == ';' || ch == '\n'
 }
 
@@ -438,20 +438,18 @@ impl Manager {
     }
 
     pub fn process_nested_outgoing_line(&self, line: &str, depth: u32) -> Result<()> {
-        for line in line.split(line_splitter) {
-            if !self.process_line_inner(
-                line,
-                depth,
-                &self.alias_regex_set,
-                &self.aliases,
-                &self.alias_regex_set_map,
-                &self.alias_regex_patterns_map,
-                TriggerMatchType::Normal,
-            )? {
-                self.session_runtime_tx
-                    .send(RuntimeAction::SendRaw(Arc::new(line.to_string())))
-                    .context("Could not send outgoing line to runtime")?;
-            }
+        if !self.process_line_inner(
+            line,
+            depth,
+            &self.alias_regex_set,
+            &self.aliases,
+            &self.alias_regex_set_map,
+            &self.alias_regex_patterns_map,
+            TriggerMatchType::Normal,
+        )? {
+            self.session_runtime_tx
+                .send(RuntimeAction::SendRaw(Arc::new(line.to_string())))
+                .context("Could not send outgoing line to runtime")?;
         }
         Ok(())
     }
@@ -492,7 +490,7 @@ impl Manager {
         debug!("Time to match and dispatch triggers on incoming line: {end:?}");
 
         self.session_runtime_tx
-            .send(RuntimeAction::AddCompleteLineToBuffer(line))
+            .send(RuntimeAction::CompleteLineTriggersProcessed(line))
             .context("Could not send incoming line to runtime")?;
         Ok(())
     }
@@ -527,7 +525,7 @@ impl Manager {
         debug!("Time to match and dispatch triggers on incoming partial line: {end:?}");
 
         self.session_runtime_tx
-            .send(RuntimeAction::AddPartialLineToBuffer(line))
+            .send(RuntimeAction::PartialLineTriggersProcessed(line))
             .context("Could not send incoming line to runtime")?;
         Ok(())
     }

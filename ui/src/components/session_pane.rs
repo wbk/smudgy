@@ -4,10 +4,12 @@ use crate::widgets::split_terminal_pane;
 use iced::futures::StreamExt;
 use iced::widget::{button, column, container, mouse_area, row, text};
 use iced::{Length, Subscription, Task};
+use log::info;
 use smudgy_core::models::aliases::load_aliases;
 use smudgy_core::models::hotkeys::load_hotkeys;
 use smudgy_core::models::profile::load_profile;
 use smudgy_core::models::server::load_server;
+use smudgy_core::models::settings::load_settings;
 use smudgy_core::models::triggers::load_triggers;
 use smudgy_core::session::runtime::RuntimeAction;
 use smudgy_core::session::{self, SessionEvent, SessionId};
@@ -15,11 +17,12 @@ use smudgy_core::session::{BufferUpdate, TaggedSessionEvent};
 use smudgy_core::session::{HotkeyId, SessionParams};
 use smudgy_core::terminal_buffer::TerminalBuffer;
 use smudgy_core::terminal_buffer::selection::Selection;
-use tokio::sync::oneshot;
+use smudgy_map::{AreaId, CloudMapper, Mapper};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self};
+use tokio::sync::oneshot;
 
 /// Represents a connection session to a server with a specific profile
 #[derive(Debug)]
@@ -33,6 +36,8 @@ pub struct SessionPane {
     pub input: session_input::SessionInput,
 
     pub session_params: Arc<SessionParams>,
+
+    pub mapper: Option<Mapper>,
 
     terminal_buffer: Rc<RefCell<TerminalBuffer>>,
     terminal_pane_selection: Rc<RefCell<Selection>>,
@@ -50,6 +55,7 @@ pub enum Message {
     Send(Arc<String>),
     SessionEvent(SessionEvent),
     HotkeyTriggered(HotkeyId),
+    SelectMapperArea(AreaId),
     Reload,
     Reconnect,
 }
@@ -60,11 +66,22 @@ impl SessionPane {
         // Create a single shared terminal buffer
         let terminal_buffer = Rc::new(RefCell::new(TerminalBuffer::new()));
 
+        let settings = load_settings();
+
+        info!("Settings: {:?}", settings);
+
         // Load profile to get the subtext (caption) once
         let profile_subtext = match load_profile(&server_name, &profile_name) {
             Ok(profile) => Arc::new(profile.config.caption),
             Err(_) => Arc::new(String::new()), // Default to empty string on error
         };
+
+        let mapper = settings.api_key.map(|api_key| {
+            Mapper::new(Arc::new(CloudMapper::new(
+                "https://api.dev.smudgy.org".to_string(),
+                api_key,
+            )))
+        });
 
         Self {
             id,
@@ -73,6 +90,7 @@ impl SessionPane {
                 server_name: Arc::new(server_name.clone()),
                 profile_name: Arc::new(profile_name.clone()),
                 profile_subtext,
+                mapper: mapper.clone(),
             }),
             server_name,
             profile_name,
@@ -81,6 +99,7 @@ impl SessionPane {
             terminal_pane_selection: Rc::new(RefCell::new(Selection::default())),
             runtime_tx: None,
             connected: false,
+            mapper,
         }
     }
 
@@ -103,6 +122,10 @@ impl SessionPane {
                 Task::none()
             }
             Message::Activate => {
+                // This message is handled by the parent (SmudgyWindow)
+                Task::none()
+            }
+            Message::SelectMapperArea(_) => {
                 // This message is handled by the parent (SmudgyWindow)
                 Task::none()
             }
@@ -181,7 +204,7 @@ impl SessionPane {
                     SessionEvent::UpdateBuffer(buffer_updates) => {
                         for update in buffer_updates.iter() {
                             match update {
-                                BufferUpdate::NewLine => {
+                                BufferUpdate::EnsureNewLine => {
                                     self.terminal_buffer.borrow_mut().commit_current_line();
                                 }
                                 BufferUpdate::Append(line) => {
@@ -203,6 +226,18 @@ impl SessionPane {
                         self.input.unregister_hotkey(&name);
                         return Task::none();
                     }
+                    SessionEvent::PerformLineOperation {
+                        line_number,
+                        operation,
+                    } => {
+                        self.terminal_buffer
+                            .borrow_mut()
+                            .perform_line_operation(line_number, operation);
+                        return Task::none();
+                    }
+                    SessionEvent::SelectMapperArea(area_id) => {
+                        return Task::done(Message::SelectMapperArea(area_id));
+                    }
                     SessionEvent::Connected => {
                         self.connected = true;
                         return Task::none();
@@ -223,26 +258,26 @@ impl SessionPane {
             Message::Reconnect => {
                 self.runtime_tx.as_ref().map(|tx| {
                     let profile_config = load_profile(&self.server_name, &self.profile_name)
-                    .expect("Failed to load profile config");
+                        .expect("Failed to load profile config");
 
-                let send_on_connect = if profile_config.config.send_on_connect.is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(profile_config.config.send_on_connect))
-                };
+                    let send_on_connect = if profile_config.config.send_on_connect.is_empty() {
+                        None
+                    } else {
+                        Some(Arc::new(profile_config.config.send_on_connect))
+                    };
 
-                let server_config = load_server(&self.server_name.as_str())
-                .expect("Failed to load server config");
+                    let server_config = load_server(&self.server_name.as_str())
+                        .expect("Failed to load server config");
 
-                // Connect to the server
-                 tx.send(RuntimeAction::Connect {
-                    host: server_config.config.host.into(),
-                    port: server_config.config.port,
-                    send_on_connect,
-                })
-                .expect("Failed to send connect command to session runtime");                });
+                    // Connect to the server
+                    tx.send(RuntimeAction::Connect {
+                        host: server_config.config.host.into(),
+                        port: server_config.config.port,
+                        send_on_connect,
+                    })
+                    .expect("Failed to send connect command to session runtime");
+                });
 
-                
                 return Task::none();
             }
         }

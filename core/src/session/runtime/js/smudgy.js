@@ -12,7 +12,20 @@ const {
     op_smudgy_session_reload,
     op_smudgy_session_send,
     op_smudgy_session_send_raw,
+    op_smudgy_insert,
+    op_smudgy_replace,
+    op_smudgy_highlight,
+    op_smudgy_remove,
+    op_smudgy_gag,
+    op_smudgy_get_current_line,
+    op_smudgy_get_current_line_number,
+    op_smudgy_line_insert,
+    op_smudgy_line_replace,
+    op_smudgy_line_highlight,
+    op_smudgy_line_remove,
+
 } = Deno.core.ops;
+
 
 /**
  * @typedef {Object} Character
@@ -381,6 +394,176 @@ function normalizePatterns(patterns) {
     return normalized;
 }
 
+/**
+ * Global line manipulation object for modifying incoming lines
+ * 
+ * Line operations are queued and applied to the next incoming line from the server.
+ * Multiple operations can be queued and will be applied in the order they were added.
+ * 
+ * @namespace line
+ */
+const line = {
+    /**
+     * Inserts text at the specified position with optional styling
+     * @param {string} text - The text to insert
+     * @param {number} begin - The start position to insert at
+     * @param {number} [end] - The end position (for replacement), defaults to begin
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    insert(text, begin, end = begin, options = {}) {
+        op_smudgy_insert(text, begin, end, options.fg || null, options.bg || null);
+    },
+
+    /**
+     * Replaces text in the specified range
+     * @param {string} text - The replacement text
+     * @param {number} begin - The start position to replace
+     * @param {number} end - The end position to replace
+     */
+    replaceAt(text, begin, end) {
+        op_smudgy_replace(text, begin, end);
+    },
+
+    /**
+     * Highlights text in the specified range with the given colors
+     * @param {number} begin - The start position to highlight
+     * @param {number} end - The end position to highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    highlightAt(begin, end, options = {}) {
+        op_smudgy_highlight(begin, end, options.fg || null, options.bg || null);
+    },
+
+    /**
+     * Removes text in the specified range
+     * @param {number} begin - The start position to remove
+     * @param {number} end - The end position to remove
+     */
+    removeAt(begin, end) {
+        op_smudgy_remove(begin, end);
+    },
+
+    /**
+     * Replaces the first occurrence of oldStr with newStr in the current line
+     * @param {string} oldStr - The text to find and replace
+     * @param {string} newStr - The replacement text
+     * @returns {boolean} True if the text was found and replaced, false otherwise
+     */
+    replace(oldStr, newStr) {
+        const currentText = op_smudgy_get_current_line();
+        const index = currentText.indexOf(oldStr);
+        if (index !== -1) {
+            this.replaceAt(newStr, index, index + oldStr.length);
+        }
+    },
+
+    /**
+     * Highlights the first occurrence of str in the current line
+     * @param {string} str - The text to find and highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @returns {boolean} True if the text was found and highlighted, false otherwise
+     */
+    highlight(str, options = {}) {
+        const currentText = op_smudgy_get_current_line();
+        const index = currentText.indexOf(str);
+        if (index !== -1) {
+            this.highlightAt(index, index + str.length, options);
+        }
+    },
+
+    /**
+     * Removes the first occurrence of str from the current line
+     * @param {string} str - The text to find and remove
+     * @returns {boolean} True if the text was found and removed, false otherwise
+     */
+    remove(str) {
+        const currentText = op_smudgy_get_current_line();
+        const index = currentText.indexOf(str);
+        if (index !== -1) {
+            this.removeAt(index, index + str.length);
+        }
+    },
+
+    /**
+     * Prevents the current line from being displayed (gags it completely)
+     */
+    gag() {
+        op_smudgy_gag();
+    },
+
+
+    get text() {
+        return op_smudgy_get_current_line();
+    },
+
+    get number() {
+        return op_smudgy_get_current_line_number();
+    }
+};
+
+
+/**
+ * Global buffer manipulation object for modifying existing lines
+ * 
+ * @namespace buffer
+ */
+const buffer = {
+    /**
+     * Inserts text at the specified position with optional styling
+     * @param {number} line_number - The line number to insert at
+     * @param {string} text - The text to insert
+     * @param {number} begin - The start position to insert at
+     * @param {number} [end] - The end position (for replacement), defaults to begin
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    insert(line_number, text, begin, end = begin, options = {}) {
+        op_smudgy_line_insert(line_number, text, begin, end, options.fg || null, options.bg || null);
+    },
+
+    /**
+     * Replaces text in the specified range
+     * @param {number} line_number - The line number to replace at
+     * @param {string} text - The replacement text
+     * @param {number} begin - The start position to replace
+     * @param {number} end - The end position to replace
+     */
+    replaceAt(line_number, text, begin, end) {
+        op_smudgy_line_replace(line_number, text, begin, end);
+    },
+
+    /**
+     * Highlights text in the specified range with the given colors
+     * @param {number} line_number - The line number to highlight at
+     * @param {number} begin - The start position to highlight
+     * @param {number} end - The end position to highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    highlightAt(line_number, begin, end, options = {}) {
+        op_smudgy_line_highlight(line_number, begin, end, options.fg || null, options.bg || null);
+    },
+
+    /**
+     * Removes text in the specified range
+     * @param {number} line_number - The line number to remove at
+     * @param {number} begin - The start position to remove
+     * @param {number} end - The end position to remove
+     */
+    removeAt(line_number, begin, end) {
+        op_smudgy_line_remove(line_number, begin, end);
+    },
+};
+Object.defineProperty(globalThis, "line", { value: line });
+Object.defineProperty(globalThis, "buffer", { value: buffer });
 Object.defineProperty(globalThis, "createAlias", { value: createAlias });
 Object.defineProperty(globalThis, "createTrigger", { value: createTrigger });
 Object.defineProperty(globalThis, "createTriggers", { value: createTriggers });

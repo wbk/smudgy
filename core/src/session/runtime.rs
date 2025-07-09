@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 use rustyscript::extensions::deno_cron::local;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use smudgy_map::{AreaId, Mapper};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::ops::Add;
@@ -24,8 +25,11 @@ use tokio::{
 
 mod trigger;
 use trigger::Manager;
+pub mod line_operation;
 mod script_action;
 mod script_engine;
+
+use line_operation::LineOperation;
 
 pub use script_action::ScriptAction;
 use script_engine::{FunctionId, ScriptEngine, ScriptEngineParams, ScriptId};
@@ -35,7 +39,7 @@ use crate::models::ScriptLang;
 use crate::models::aliases::AliasDefinition;
 use crate::models::hotkeys::HotkeyDefinition;
 use crate::models::triggers::TriggerDefinition;
-use crate::session::runtime::trigger::PushTriggerParams;
+use crate::session::runtime::trigger::{PushTriggerParams, line_splitter};
 use crate::session::{HotkeyId, registry};
 
 use super::{SessionId, TaggedSessionEvent, connection::Connection, styled_line::StyledLine};
@@ -51,10 +55,12 @@ pub enum RuntimeAction {
     },
     HandleIncomingLine(Arc<StyledLine>),
     HandleIncomingPartialLine(Arc<StyledLine>),
-    AddCompleteLineToBuffer(Arc<StyledLine>),
-    AddPartialLineToBuffer(Arc<StyledLine>),
+    CompleteLineTriggersProcessed(Arc<StyledLine>),
+    PartialLineTriggersProcessed(Arc<StyledLine>),
+    PerformLineOperation { line_number: usize, operation: LineOperation },
     Send(Arc<String>),
     SendRaw(Arc<String>),
+    ProcessOutgoingLine(Arc<String>),
     Echo(Arc<String>),
     EvalJavascript {
         id: ScriptId,
@@ -97,6 +103,7 @@ pub enum RuntimeAction {
     ExecHotkey {
         id: HotkeyId,
     },
+    SelectMapperArea(AreaId),
     RequestRepaint,
     Connected,
     Reload,
@@ -119,11 +126,12 @@ enum ActionResult {
     Echo(String),
     Reload,
     CloseSession,
+    Run(Vec<RuntimeAction>),
 }
 
 enum RunAction {
     None,
-    Reload
+    Reload,
 }
 
 static RUNTIME_THREADS: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
@@ -144,6 +152,7 @@ impl Runtime {
         server_name: Arc<String>,
         profile_name: Arc<String>,
         profile_subtext: Arc<String>,
+        mapper: Option<Mapper>,
         ui_tx: Sender<TaggedSessionEvent>,
     ) -> Self {
         let (session_runtime_tx, session_runtime_rx) =
@@ -160,17 +169,25 @@ impl Runtime {
         let local_ui_tx = ui_tx.clone();
 
         let thread = thread::spawn(move || {
+            let pending_line_operations = Rc::new(RefCell::new(Vec::new()));
+
+            // We start at 1 because the first line ("Loading session...") is already emitted
+            let emitted_line_count = Rc::new(Cell::new(0));
+
             let script_engine = ScriptEngine::new(ScriptEngineParams {
                 session_id,
                 server_name: &local_server_name,
                 profile_name: &local_profile_name,
                 ui_tx: local_ui_tx.clone(),
                 runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+                pending_line_operations: &pending_line_operations,
+                emitted_line_count: Rc::downgrade(&emitted_line_count),
+                mapper: mapper.clone(),
             });
 
             let trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
 
-            let runtime = tokio::runtime::Builder::new_multi_thread()
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("Failed to create tokio runtime");
@@ -184,6 +201,7 @@ impl Runtime {
                 script_engine,
                 server_name: &local_server_name,
                 profile_name: &local_profile_name,
+                mapper: mapper.clone(),
                 session_runtime_rx,
                 session_runtime_oob_rx,
                 session_runtime_tx: local_session_runtime_tx.clone(),
@@ -191,11 +209,13 @@ impl Runtime {
                 ui_tx: local_ui_tx.clone(),
                 connection: None,
                 pending_buffer_updates: Vec::new(),
+                pending_line_operations: pending_line_operations.clone(),
+                emitted_line_count: emitted_line_count.clone(),
             };
 
             while let RunAction::Reload = runtime.block_on(inner.run()) {
                 info!("Reloading session runtime...");
-                
+
                 // Extract the receivers and connection from the old inner before dropping it
                 let old_connection = inner.connection.take();
                 let old_session_runtime_rx = std::mem::replace(&mut inner.session_runtime_rx, {
@@ -203,15 +223,15 @@ impl Runtime {
                     let (_, rx) = tokio::sync::mpsc::unbounded_channel();
                     rx
                 });
-                let old_session_runtime_oob_rx = std::mem::replace(&mut inner.session_runtime_oob_rx, {
-                    // Create a dummy receiver that will be immediately replaced  
-                    let (_, rx) = tokio::sync::mpsc::unbounded_channel();
-                    rx
-                });
-                
-                
+                let old_session_runtime_oob_rx =
+                    std::mem::replace(&mut inner.session_runtime_oob_rx, {
+                        // Create a dummy receiver that will be immediately replaced
+                        let (_, rx) = tokio::sync::mpsc::unbounded_channel();
+                        rx
+                    });
+
                 drop(inner);
-                
+
                 // Create completely new Inner struct with fresh ScriptEngine and TriggerManager
                 // This avoids any V8 isolate replacement issues
                 let new_script_engine = ScriptEngine::new(ScriptEngineParams {
@@ -220,6 +240,9 @@ impl Runtime {
                     profile_name: &local_profile_name,
                     ui_tx: local_ui_tx.clone(),
                     runtime_oob_tx: local_session_runtime_oob_tx.clone(),
+                    pending_line_operations: &pending_line_operations,
+                    emitted_line_count: Rc::downgrade(&emitted_line_count),
+                    mapper: mapper.clone(),
                 });
 
                 let new_trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
@@ -241,8 +264,11 @@ impl Runtime {
                     ui_tx: local_ui_tx.clone(),
                     connection: old_connection, // Preserve the connection
                     pending_buffer_updates: Vec::new(),
+                    pending_line_operations: pending_line_operations.clone(), // Preserve the shared operations
+                    emitted_line_count: emitted_line_count.clone(),
+                    mapper: mapper.clone(),
                 };
-                
+
                 info!("Session runtime reloaded successfully");
             }
 
@@ -285,34 +311,101 @@ struct Inner<'a> {
     hotkeys: BTreeMap<HotkeyId, ScriptAction>,
     next_hotkey_id: HotkeyId,
     log_file: Option<BufWriter<File>>,
+    pending_line_operations: Rc<RefCell<Vec<LineOperation>>>,
+    emitted_line_count: Rc<Cell<usize>>,
+    mapper: Option<Mapper>,
 }
 
 impl<'a> Inner<'a> {
+    /// Applies all pending line operations to the given line and clears the operations queue.
+    /// Returns None if any operation gags the line, otherwise returns the processed line.
+    fn apply_pending_line_operations(
+        &self,
+        line: Arc<StyledLine>,
+    ) -> Result<Option<Arc<StyledLine>>, anyhow::Error> {
+        let mut operations = self.pending_line_operations.borrow_mut();
+
+        // If no operations are pending, return the line unchanged
+        if operations.is_empty() {
+            return Ok(Some(line));
+        }
+
+        // Collect all operations and clear the queue
+        let operations_to_apply: Vec<LineOperation> = operations.drain(..).collect();
+        drop(operations); // Release the lock early
+
+        // Apply each operation in sequence
+        let mut current_line = line;
+        for operation in operations_to_apply {
+            match operation.apply(current_line) {
+                Some(processed_line) => current_line = processed_line,
+                None => {
+                    // Line was gagged, return None immediately
+                    return Ok(None);
+                }
+            }
+        }
+
+        Ok(Some(current_line))
+    }
+
+    #[inline]
+    fn echo_warn_str_sync<'s>(
+        &'s mut self,
+        line: &str,
+    ) {
+        if self.pending_buffer_updates.last().map_or(false, |update| match update {
+            BufferUpdate::EnsureNewLine => false,
+            _ => true,
+        }) {
+            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+        }
+
+        for line in line.split('\n') {
+            let styled_line = Arc::new(StyledLine::from_warn_str(line));
+            self.pending_buffer_updates
+                .push(BufferUpdate::Append(styled_line));
+            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+        }
+    }
+
     fn echo_warn_str<'s>(
         &'s mut self,
         line: &str,
     ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
-        let styled_line = Arc::new(StyledLine::from_warn_str(line));
-
-        self.pending_buffer_updates.push(BufferUpdate::NewLine);
-        self.pending_buffer_updates
-            .push(BufferUpdate::Append(styled_line));
-        self.pending_buffer_updates.push(BufferUpdate::NewLine);
-
+        self.echo_warn_str_sync(line); 
         Ok(self.flush_buffer_updates()?)
+    }
+
+    #[inline]
+    fn echo_str_sync<'s>(
+        &'s mut self,
+        line: &str,
+    )  {
+        if self.pending_buffer_updates.last().map_or(false, |update| match update {
+            BufferUpdate::EnsureNewLine => false,
+            _ => true,
+        }) {
+            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+        }
+
+        for line in line.split('\n') {
+            let styled_line = Arc::new(StyledLine::from_echo_str(line));
+            self.pending_buffer_updates
+                .push(BufferUpdate::Append(styled_line));
+            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+        }
     }
 
     fn echo_str<'s>(
         &'s mut self,
         line: &str,
     ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
-        let styled_line = Arc::new(StyledLine::from_echo_str(line));
-
-        self.pending_buffer_updates.push(BufferUpdate::NewLine);
-        self.pending_buffer_updates
-            .push(BufferUpdate::Append(styled_line));
-        self.pending_buffer_updates.push(BufferUpdate::NewLine);
-
+        self.echo_str_sync(line);
         Ok(self.flush_buffer_updates()?)
     }
 
@@ -326,7 +419,10 @@ impl<'a> Inner<'a> {
 
         self.pending_buffer_updates
             .push(BufferUpdate::Append(styled_line));
-        self.pending_buffer_updates.push(BufferUpdate::NewLine);
+        self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+
+        self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+
 
         if let Some(ref connection) = self.connection {
             if let Err(e) = connection.write(arc_socket_str) {
@@ -348,7 +444,7 @@ impl<'a> Inner<'a> {
         if let Some(log_file) = self.log_file.as_mut() {
             for update in self.pending_buffer_updates.iter() {
                 match update {
-                    BufferUpdate::NewLine => {
+                    BufferUpdate::EnsureNewLine => {
                         log_file.write_all(b"\n")?;
                     }
                     BufferUpdate::Append(line) => {
@@ -385,10 +481,8 @@ impl<'a> Inner<'a> {
 
                 if let Some(send_on_connect) = send_on_connect {
                     let local_tx = self.session_runtime_tx.clone();
-                    let mut local_ui_tx = self.ui_tx.clone();
-                    let session_id = self.session_id;
-                    connection.on_connect(move || {                        
-                        local_tx.send(RuntimeAction::Send(send_on_connect)).ok();                        
+                    connection.on_connect(move || {
+                        local_tx.send(RuntimeAction::Send(send_on_connect)).ok();
                     });
                 }
                 connection.connect(host.as_str(), port);
@@ -397,12 +491,16 @@ impl<'a> Inner<'a> {
                 Ok(ActionResult::None)
             }
             RuntimeAction::HandleIncomingLine(line) => {
+                self.script_engine
+                    .set_current_line(Some(Arc::downgrade(&line)));
                 match self.trigger_manager.process_incoming_line(line) {
                     Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!("Error processing line {err:?}"))),
                 }
             }
             RuntimeAction::HandleIncomingPartialLine(line) => {
+                self.script_engine
+                    .set_current_line(Some(Arc::downgrade(&line)));
                 match self.trigger_manager.process_partial_line(line) {
                     Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!(
@@ -422,16 +520,47 @@ impl<'a> Inner<'a> {
                 }
                 Ok(ActionResult::None)
             }
-            RuntimeAction::AddCompleteLineToBuffer(line) => {
-                self.pending_buffer_updates.push(BufferUpdate::Append(line));
-                self.pending_buffer_updates.push(BufferUpdate::NewLine);
+            RuntimeAction::CompleteLineTriggersProcessed(line) => {
+                // Apply pending line operations first
+                self.script_engine.set_current_line(None);
+                let processed_line = self.apply_pending_line_operations(line)?;
+                if let Some(processed_line) = processed_line {
+                    self.pending_buffer_updates
+                        .push(BufferUpdate::Append(processed_line));
+                    self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+
+                    self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+
+                }
                 Ok(ActionResult::None)
             }
-            RuntimeAction::AddPartialLineToBuffer(line) => {
-                self.pending_buffer_updates.push(BufferUpdate::Append(line));
+            RuntimeAction::PartialLineTriggersProcessed(line) => {
+                // Apply pending line operations first
+                self.script_engine.set_current_line(None);
+                let processed_line = self.apply_pending_line_operations(line)?;
+                if let Some(processed_line) = processed_line {
+                    self.pending_buffer_updates
+                        .push(BufferUpdate::Append(processed_line));
+                }
                 Ok(ActionResult::None)
             }
             RuntimeAction::Send(line) => {
+                if line.starts_with('=') {
+                    match self.trigger_manager.process_outgoing_line(&line[1..]) {
+                        Ok(()) => Ok(ActionResult::None),
+                        Err(err) => Ok(ActionResult::Echo(format!(
+                            "Error processing command {err:?}"
+                        ))),
+                    }
+                } else {
+                    Ok(ActionResult::Run(
+                    line.split(trigger::line_splitter)
+                        .map(|line| RuntimeAction::ProcessOutgoingLine(Arc::new(line.to_string())))
+                        .collect()    ))
+                }
+                    
+            },
+            RuntimeAction::ProcessOutgoingLine(line) => {
                 match self.trigger_manager.process_outgoing_line(line.as_str()) {
                     Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!(
@@ -471,10 +600,18 @@ impl<'a> Inner<'a> {
                         ScriptAction::SendSimple(hotkey.script.clone().unwrap_or_default().into())
                     }
                     ScriptLang::JS | ScriptLang::TS => {
-                        let script_id = self
+                        match self
                             .script_engine
-                            .add_script(hotkey.script.as_ref().map_or("", |s| s.as_str()))?;
-                        ScriptAction::EvalJavascript(script_id)
+                            .add_script(hotkey.script.as_ref().map_or("", |s| s.as_str()))
+                        {
+                            Ok(script_id) => ScriptAction::EvalJavascript(script_id),
+                            Err(err) => {
+                                self.echo_warn_str(
+                                    format!("Error adding script: {:?}", err).as_str(),
+                                )?;
+                                ScriptAction::Noop
+                            }
+                        }
                     }
                 };
                 self.hotkeys.insert(hotkey_id, action);
@@ -496,14 +633,14 @@ impl<'a> Inner<'a> {
                             }
                             Ok(ActionResult::None)
                         }
-                        ScriptAction::SendSimple(script) => {
-                            match self.trigger_manager.process_outgoing_line(script.as_str()) {
-                                Ok(()) => Ok(ActionResult::None),
-                                Err(err) => Ok(ActionResult::Echo(format!(
-                                    "Error processing command {err:?}"
-                                ))),
-                            }
-                        }
+                        ScriptAction::SendSimple(script) => Ok(ActionResult::Run(
+                            script
+                                .split(line_splitter)
+                                .map(|line| {
+                                    RuntimeAction::ProcessOutgoingLine(Arc::new(line.to_string()))
+                                })
+                                .collect(),
+                        )),
                         ScriptAction::EvalJavascript(script_id) => {
                             self.script_engine
                                 .run_script(&self.trigger_manager, *script_id, &Arc::new(vec![]), 0)
@@ -624,15 +761,30 @@ impl<'a> Inner<'a> {
                 Ok(ActionResult::None)
             }
             RuntimeAction::Connected => {
+                self.ui_tx
+                    .send(TaggedSessionEvent {
+                        session_id: self.session_id,
+                        event: SessionEvent::Connected,
+                    })
+                    .await?;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::PerformLineOperation { line_number, operation } => {
+
                 self.ui_tx.send(TaggedSessionEvent {
                     session_id: self.session_id,
-                    event: SessionEvent::Connected,
+                    event: SessionEvent::PerformLineOperation { line_number, operation },
                 }).await?;
                 Ok(ActionResult::None)
             }
-            RuntimeAction::Reload => {
-                Ok(ActionResult::Reload)
-            },
+            RuntimeAction::SelectMapperArea(id) => {
+                self.ui_tx.send(TaggedSessionEvent {
+                    session_id: self.session_id,
+                    event: SessionEvent::SelectMapperArea(id)
+                }).await?;
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::Reload => Ok(ActionResult::Reload),
             RuntimeAction::Shutdown => Ok(ActionResult::CloseSession),
             RuntimeAction::Noop => Ok(ActionResult::None),
         }
@@ -640,6 +792,10 @@ impl<'a> Inner<'a> {
 
     pub async fn run(&mut self) -> RunAction {
         let mut script_engine_tick_interval = ScriptEngine::tick_interval();
+
+        // Stack-based action processing
+        let mut action_stack: Vec<VecDeque<RuntimeAction>> = Vec::new();
+        const MAX_STACK_DEPTH: usize = 100;
 
         // TODO: make logging configurable
         self.start_logging().unwrap();
@@ -649,8 +805,22 @@ impl<'a> Inner<'a> {
             self.session_id, self.server_name, self.profile_name
         );
 
-        
-        if let Err(e) = self.ui_tx
+        if let Some(mapper) = self.mapper.clone() {
+            self.echo_str_sync("Loading maps...");
+            if let Err(e) = mapper.load_all_areas().await {
+                self.echo_warn_str_sync(&format!("Failed to load all maps: {:?}", e));
+            }
+
+            let atlas = mapper.get_current_atlas();
+
+            for area in atlas.areas() {
+                self.echo_str_sync(&format!("Loaded map area: {} ({})", area.get_name(), area.get_id()));
+            }
+        }
+
+
+        if let Err(e) = self
+            .ui_tx
             .send(TaggedSessionEvent {
                 session_id: self.session_id,
                 event: SessionEvent::RuntimeReady(self.session_runtime_tx.clone()),
@@ -660,78 +830,128 @@ impl<'a> Inner<'a> {
             error!("Failed to send runtime ready event: {:?}", e);
         }
 
+
         loop {
+            // Phase 1: Always poll script engine once per iteration (non-blocking)
+            
+
             std::future::poll_fn(|cx| {
                 Poll::Ready(match self.script_engine.poll_event_loop(cx) {
-                    Poll::Ready(t) => t.map(|()| false),
-                    Poll::Pending => Ok(true),
+                    Poll::Ready(result) => {
+                        if let Err(err) = result {
+                            warn!("Error in script engine event loop: {err:?}");
+                             self.echo_warn_str_sync(format!("{err:?}").as_str());
+                        }
+                        // Event loop completed some work, continue to action processing
+                    }
+                    Poll::Pending => {
+                        // Event loop is waiting for async operations, continue to action processing
+                    }
                 })
             })
-            .await
-            .map_err(|err| {
-                warn!("Error in script engine event loop: {err:?}");
-                self.echo_warn_str(format!("{err:?}").as_str())
-            })
-            .ok();
+            .await;
 
-            select! {
-                biased;
-                _ = script_engine_tick_interval.tick() => {
-                    // this serves to trigger a cancel on the pending receive below when it's time
-                    // for the event loop above to tick
+            // Phase 2: Get next action to process
+            let action = if let Some(current_frame) = action_stack.last_mut() {
+                // We have spawned actions in the stack
+                // Check for OOB interrupts first (non-blocking)
+                if let Ok(oob_action) = self.session_runtime_oob_rx.try_recv() {
+                    trace!("Handling OOB interrupt: {oob_action:?}");
+                    Some(oob_action)
+                } else if let Some(spawned_action) = current_frame.pop_front() {
+                    // Process next spawned action
+                    trace!("Handling spawned action: {spawned_action:?}");
+                    Some(spawned_action)
+                } else {
+                    // Current frame is empty, pop it and continue
+                    action_stack.pop();
+                    trace!(
+                        "Completed action frame, stack depth: {}",
+                        action_stack.len()
+                    );
+                    continue;
                 }
-                Some(action) = self.session_runtime_oob_rx.recv() => {
-                    trace!("Handling OOB action: {action:?}");
-                    match self.handle_action(action).await {
-                        Ok(ActionResult::None) => {}
-                        Ok(ActionResult::Echo(line)) => {
-                            if let Ok(Some(fut)) = self.echo_str(line.as_str()) {
-                                if let Err(_) = fut.await {
-                                    warn!("Failed to echo line");
-                                    break;
-                                }
-                            } else {
+            } else {
+                // No spawned actions, wait for external input
+                select! {
+                    biased;
+                    _ = script_engine_tick_interval.tick() => {
+                        // Wake up periodically to check script engine
+                        continue;
+                    }
+                    Some(oob_action) = self.session_runtime_oob_rx.recv() => {
+                        trace!("Handling OOB action: {oob_action:?}");
+                        Some(oob_action)
+                    }
+                    Some(external_action) = self.session_runtime_rx.recv() => {
+                        trace!("Handling external action: {external_action:?}");
+                        Some(external_action)
+                    }
+                }
+            };
+
+            // Phase 3: Process the action if we have one
+            if let Some(action) = action {
+                match self.handle_action(action).await {
+                    Ok(ActionResult::None) => {}
+                    Ok(ActionResult::Echo(line)) => {
+                        if let Ok(Some(fut)) = self.echo_str(line.as_str()) {
+                            if fut.await.is_err() {
                                 warn!("Failed to echo line");
                                 break;
                             }
-                        }
-                        Ok(ActionResult::CloseSession) => {
-                            info!("Session [{}, {} - {}] Closing", self.session_id, self.server_name, self.profile_name);
-                            break;
-                        }
-                        Ok(ActionResult::Reload) => {
-                            return RunAction::Reload;
-                        }
-                        Err(err) => {
-                            warn!("Error in script runtime: {err:?}, ending");
+                        } else {
+                            warn!("Failed to echo line");
                             break;
                         }
                     }
-                }
-                Some(action) = self.session_runtime_rx.recv() => {
-                    trace!("Handling action: {action:?}");
-                    match self.handle_action(action).await {
-                        Ok(ActionResult::None) => {}
-                        Ok(ActionResult::Echo(line)) => {
-                            if let Ok(Some(fut)) = self.echo_str(line.as_str()) {
-                                if let Err(_) = fut.await {
-                                    warn!("Failed to echo line");
-                                    break;
+                    Ok(ActionResult::CloseSession) => {
+                        info!(
+                            "Session [{}, {} - {}] Closing",
+                            self.session_id, self.server_name, self.profile_name
+                        );
+                        break;
+                    }
+                    Ok(ActionResult::Reload) => {
+                        return RunAction::Reload;
+                    }
+                    Ok(ActionResult::Run(spawned_actions)) => {
+                        // For OOB actions that spawn more actions, add to current frame instead of creating new frame
+                        if let Some(current_frame) = action_stack.last_mut() {
+                            // Add spawned actions to the front of current frame for immediate processing
+                            for spawned_action in spawned_actions.into_iter().rev() {
+                                current_frame.push_front(spawned_action);
+                            }
+                            trace!("Added spawned actions to current frame (OOB handling)");
+                        } else {
+                            // No current frame - create new frame
+                            if action_stack.len() >= MAX_STACK_DEPTH {
+                                warn!("Maximum action stack depth exceeded: {}", MAX_STACK_DEPTH);
+                                if let Ok(Some(fut)) =
+                                    self.echo_str("Error: Maximum execution depth exceeded")
+                                {
+                                    let _ = fut.await;
                                 }
                             } else {
+                                action_stack.push(VecDeque::from(spawned_actions));
+                                trace!(
+                                    "Pushed new action frame, stack depth: {}",
+                                    action_stack.len()
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!("Error in runtime: {err:?}");
+                        if let Ok(Some(fut)) =
+                            self.echo_str(format!("Error in runtime: {err:?}").as_str())
+                        {
+                            if fut.await.is_err() {
                                 warn!("Failed to echo line");
                                 break;
                             }
-                        }
-                        Ok(ActionResult::CloseSession) => {
-                            info!("Session [{}, {} - {}] Closing", self.session_id, self.server_name, self.profile_name);
-                            break;
-                        }
-                        Ok(ActionResult::Reload) => {
-                            return RunAction::Reload;
-                        }
-                         Err(err) => {
-                            warn!("Error in script runtime: {err:?}, ending");
+                        } else {
+                            warn!("Failed to echo line");
                             break;
                         }
                     }

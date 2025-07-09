@@ -61,7 +61,7 @@ impl<Link: Clone> Spans<Link> {
     }
 
     pub fn select_range(&mut self, sel_start: usize, sel_end: usize) {
-        let mut span_start = 0;
+        let mut char_position = 0; // Track character position across spans
 
         self.selected.clear();
 
@@ -69,58 +69,64 @@ impl<Link: Clone> Spans<Link> {
             self.spans
                 .iter()
                 .flat_map(|span| {
-                    let span_end = span_start + span.text.len();
+                    // Convert span text to character indices for safe slicing
+                    let span_chars: Vec<char> = span.text.chars().collect();
+                    let span_char_len = span_chars.len();
+                    let span_char_end = char_position + span_char_len;
 
-                    let mut spans = Vec::with_capacity(1);
+                    let mut spans = Vec::with_capacity(3);
 
-                    if sel_start > span_start {
-                        // at least part of the span is before the selection
-                        let unselected_end = min(sel_start, span_end) - span_start;
-                        spans.push((
-                            false,
-                            Span {
-                                text: Cow::Owned(span.text[0..unselected_end].to_string()),
-                                link: span.link.clone(),
-                                ..*span
-                            },
-                        ))
+                    // Part before selection
+                    if sel_start > char_position {
+                        let unselected_end = min(sel_start, span_char_end) - char_position;
+                        if unselected_end > 0 {
+                            let text: String = span_chars[0..unselected_end].iter().collect();
+                            spans.push((
+                                false,
+                                Span {
+                                    text: Cow::Owned(text),
+                                    link: span.link.clone(),
+                                    ..*span
+                                },
+                            ));
+                        }
                     }
 
-                    if sel_start < span_end && sel_end > span_start {
-                        // at least part of the span is selected
-                        let selected_start = max(sel_start, span_start) - span_start;
-                        let selected_end = min(sel_end, span_end) - span_start;
+                    // Selected part
+                    if sel_start < span_char_end && sel_end > char_position {
+                        let selected_start = max(sel_start, char_position) - char_position;
+                        let selected_end = min(sel_end, span_char_end) - char_position;
 
-                        spans.push((
-                            true,
-                            Span {
-                                text: Cow::Owned(
-                                    span.text[selected_start..selected_end].to_string(),
-                                ),
-                                link: span.link.clone(),
-                                ..*span
-                            },
-                        ))
+                        if selected_end > selected_start {
+                            let text: String = span_chars[selected_start..selected_end].iter().collect();
+                            spans.push((
+                                true,
+                                Span {
+                                    text: Cow::Owned(text),
+                                    link: span.link.clone(),
+                                    ..*span
+                                },
+                            ));
+                        }
                     }
 
-                    if sel_end < span_end {
-                        // at least part of the span is after the selection
-                        let unselected_start = max(sel_end, span_start) - span_start;
-
-                        spans.push((
-                            false,
-                            Span {
-                                text: Cow::Owned(
-                                    span.text[unselected_start..span.text.len()].to_string(),
-                                ),
-                                link: span.link.clone(),
-                                ..*span
-                            },
-                        ))
+                    // Part after selection
+                    if sel_end < span_char_end {
+                        let unselected_start = max(sel_end, char_position) - char_position;
+                        if unselected_start < span_char_len {
+                            let text: String = span_chars[unselected_start..].iter().collect();
+                            spans.push((
+                                false,
+                                Span {
+                                    text: Cow::Owned(text),
+                                    link: span.link.clone(),
+                                    ..*span
+                                },
+                            ));
+                        }
                     }
 
-                    span_start = span_end;
-
+                    char_position = span_char_end;
                     spans
                 })
                 .enumerate()

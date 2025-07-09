@@ -5,7 +5,8 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::session::styled_line::StyledLine;
+use crate::session::runtime::line_operation::LineOperation;
+use crate::session::styled_line::{Style, StyledLine, VtSpan};
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroUsize;
 
@@ -14,7 +15,7 @@ type Link = ();
 pub mod selection;
 
 #[inline]
-fn to_span(styled_line: &Arc<StyledLine>) -> Rc<Vec<Span<'static, Link>>> {
+fn to_spans(styled_line: &Arc<StyledLine>) -> Rc<Vec<Span<'static, Link>>> {
     Rc::new(
         styled_line
             .spans
@@ -40,6 +41,7 @@ impl AsRef<[Span<'static, ()>]> for BufferLine {
 pub struct BufferLine {
     pub styled_line: Arc<StyledLine>,
     pub spans: Rc<Vec<Span<'static, ()>>>,
+    pub gagged: bool,
 }
 
 impl PartialEq for BufferLine {
@@ -51,8 +53,9 @@ impl PartialEq for BufferLine {
 impl From<Arc<StyledLine>> for BufferLine {
     fn from(styled_line: Arc<StyledLine>) -> Self {
         Self {
-            spans: to_span(&styled_line),
+            spans: to_spans(&styled_line),
             styled_line,
+            gagged: false,
         }
     }
 }
@@ -108,6 +111,7 @@ impl TerminalBuffer {
             while self.lines.len() > (self.max_lines.get() - 1) {
                 self.lines.pop_front();
             }
+
             self.lines.push_back(line_in.into());
         } else {
             match self.lines.pop_back() {
@@ -265,6 +269,20 @@ impl TerminalBuffer {
                 }
                 None
             })
+    }
+
+    pub fn perform_line_operation(&mut self, line_number: usize, operation: LineOperation) {
+        let offset = self.last_line_number - self.lines.len();
+        let line_number = line_number - offset - 1;
+        self.lines.get_mut(line_number).map( |line| {
+            let new_line = operation.apply(line.styled_line.clone());
+            if let Some(new_line) = new_line {
+                line.styled_line = new_line;
+                line.spans = to_spans(&line.styled_line);
+            } else {
+                line.gagged = true; // currently has no effect
+            }    
+        });
     }
 }
 
