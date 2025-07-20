@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use iced_jsx::IcedJsxRoot;
 use rustyscript::extensions::deno_cron::local;
 use smudgy_map::{AreaId, Mapper};
 use std::cell::{Cell, RefCell};
@@ -7,6 +8,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::ops::Add;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 use std::{
@@ -57,20 +59,26 @@ pub enum RuntimeAction {
     HandleIncomingPartialLine(Arc<StyledLine>),
     CompleteLineTriggersProcessed(Arc<StyledLine>),
     PartialLineTriggersProcessed(Arc<StyledLine>),
-    PerformLineOperation { line_number: usize, operation: LineOperation },
+    PerformLineOperation {
+        line_number: usize,
+        operation: LineOperation,
+    },
     Send(Arc<String>),
     SendRaw(Arc<String>),
+    SendRawUnless(Arc<AtomicBool>, Arc<String>),
     ProcessOutgoingLine(Arc<String>),
     Echo(Arc<String>),
     EvalJavascript {
         id: ScriptId,
         matches: Arc<Vec<(String, String)>>,
         depth: u32,
+        is_captured: Option<Arc<AtomicBool>>,
     },
     CallJavascriptFunction {
         id: FunctionId,
         matches: Arc<Vec<(String, String)>>,
         depth: u32,
+        is_captured: Option<Arc<AtomicBool>>,
     },
     AddHotkey {
         name: Arc<String>,
@@ -103,7 +111,7 @@ pub enum RuntimeAction {
     ExecHotkey {
         id: HotkeyId,
     },
-    SelectMapperArea(AreaId),
+    SetCurrentLocation(AreaId, Option<i32>),
     RequestRepaint,
     Connected,
     Reload,
@@ -153,6 +161,7 @@ impl Runtime {
         profile_name: Arc<String>,
         profile_subtext: Arc<String>,
         mapper: Option<Mapper>,
+        jsx_widgets: IcedJsxRoot<'static, (), smudgy_theme::Theme, iced::Renderer>,
         ui_tx: Sender<TaggedSessionEvent>,
     ) -> Self {
         let (session_runtime_tx, session_runtime_rx) =
@@ -174,6 +183,11 @@ impl Runtime {
             // We start at 1 because the first line ("Loading session...") is already emitted
             let emitted_line_count = Rc::new(Cell::new(0));
 
+            let runtime = Rc::new(tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime"));
+
             let script_engine = ScriptEngine::new(ScriptEngineParams {
                 session_id,
                 server_name: &local_server_name,
@@ -183,14 +197,11 @@ impl Runtime {
                 pending_line_operations: &pending_line_operations,
                 emitted_line_count: Rc::downgrade(&emitted_line_count),
                 mapper: mapper.clone(),
+                jsx_widgets: jsx_widgets.clone(),
+                tokio_runtime: runtime.clone(),
             });
 
             let trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
-
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime");
 
             let mut inner = Inner {
                 log_file: None,
@@ -243,6 +254,8 @@ impl Runtime {
                     pending_line_operations: &pending_line_operations,
                     emitted_line_count: Rc::downgrade(&emitted_line_count),
                     mapper: mapper.clone(),
+                    jsx_widgets: jsx_widgets.clone(),
+                    tokio_runtime: runtime.clone(),
                 });
 
                 let new_trigger_manager = Manager::new(local_session_runtime_oob_tx.clone());
@@ -350,24 +363,29 @@ impl<'a> Inner<'a> {
     }
 
     #[inline]
-    fn echo_warn_str_sync<'s>(
-        &'s mut self,
-        line: &str,
-    ) {
-        if self.pending_buffer_updates.last().map_or(false, |update| match update {
-            BufferUpdate::EnsureNewLine => false,
-            _ => true,
-        }) {
-            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
-            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+    fn echo_warn_str_sync<'s>(&'s mut self, line: &str) {
+        if self
+            .pending_buffer_updates
+            .last()
+            .map_or(false, |update| match update {
+                BufferUpdate::EnsureNewLine => false,
+                _ => true,
+            })
+        {
+            self.pending_buffer_updates
+                .push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count
+                .set(self.emitted_line_count.get() + 1);
         }
 
         for line in line.split('\n') {
             let styled_line = Arc::new(StyledLine::from_warn_str(line));
             self.pending_buffer_updates
                 .push(BufferUpdate::Append(styled_line));
-            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
-            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+            self.pending_buffer_updates
+                .push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count
+                .set(self.emitted_line_count.get() + 1);
         }
     }
 
@@ -375,29 +393,34 @@ impl<'a> Inner<'a> {
         &'s mut self,
         line: &str,
     ) -> Result<Option<SentSessionEvent<'s>>, anyhow::Error> {
-        self.echo_warn_str_sync(line); 
+        self.echo_warn_str_sync(line);
         Ok(self.flush_buffer_updates()?)
     }
 
     #[inline]
-    fn echo_str_sync<'s>(
-        &'s mut self,
-        line: &str,
-    )  {
-        if self.pending_buffer_updates.last().map_or(false, |update| match update {
-            BufferUpdate::EnsureNewLine => false,
-            _ => true,
-        }) {
-            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
-            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+    fn echo_str_sync<'s>(&'s mut self, line: &str) {
+        if self
+            .pending_buffer_updates
+            .last()
+            .map_or(false, |update| match update {
+                BufferUpdate::EnsureNewLine => false,
+                _ => true,
+            })
+        {
+            self.pending_buffer_updates
+                .push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count
+                .set(self.emitted_line_count.get() + 1);
         }
 
         for line in line.split('\n') {
             let styled_line = Arc::new(StyledLine::from_echo_str(line));
             self.pending_buffer_updates
                 .push(BufferUpdate::Append(styled_line));
-            self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
-            self.emitted_line_count.set(self.emitted_line_count.get() + 1);
+            self.pending_buffer_updates
+                .push(BufferUpdate::EnsureNewLine);
+            self.emitted_line_count
+                .set(self.emitted_line_count.get() + 1);
         }
     }
 
@@ -419,10 +442,11 @@ impl<'a> Inner<'a> {
 
         self.pending_buffer_updates
             .push(BufferUpdate::Append(styled_line));
-        self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+        self.pending_buffer_updates
+            .push(BufferUpdate::EnsureNewLine);
 
-        self.emitted_line_count.set(self.emitted_line_count.get() + 1);
-
+        self.emitted_line_count
+            .set(self.emitted_line_count.get() + 1);
 
         if let Some(ref connection) = self.connection {
             if let Err(e) = connection.write(arc_socket_str) {
@@ -469,7 +493,6 @@ impl<'a> Inner<'a> {
         &mut self,
         action: RuntimeAction,
     ) -> Result<ActionResult, anyhow::Error> {
-        debug!("Handling action: {:?}", action);
         match action {
             RuntimeAction::Connect {
                 host,
@@ -527,10 +550,11 @@ impl<'a> Inner<'a> {
                 if let Some(processed_line) = processed_line {
                     self.pending_buffer_updates
                         .push(BufferUpdate::Append(processed_line));
-                    self.pending_buffer_updates.push(BufferUpdate::EnsureNewLine);
+                    self.pending_buffer_updates
+                        .push(BufferUpdate::EnsureNewLine);
 
-                    self.emitted_line_count.set(self.emitted_line_count.get() + 1);
-
+                    self.emitted_line_count
+                        .set(self.emitted_line_count.get() + 1);
                 }
                 Ok(ActionResult::None)
             }
@@ -554,13 +578,17 @@ impl<'a> Inner<'a> {
                     }
                 } else {
                     Ok(ActionResult::Run(
-                    line.split(trigger::line_splitter)
-                        .map(|line| RuntimeAction::ProcessOutgoingLine(Arc::new(line.to_string())))
-                        .collect()    ))
+                        line.split(trigger::line_splitter)
+                            .map(|line| {
+                                RuntimeAction::ProcessOutgoingLine(Arc::new(line.to_string()))
+                            })
+                            .collect(),
+                    ))
                 }
-                    
-            },
+            }
             RuntimeAction::ProcessOutgoingLine(line) => {
+                self.script_engine.set_is_captured(false);
+
                 match self.trigger_manager.process_outgoing_line(line.as_str()) {
                     Ok(()) => Ok(ActionResult::None),
                     Err(err) => Ok(ActionResult::Echo(format!(
@@ -579,16 +607,67 @@ impl<'a> Inner<'a> {
                 }
                 Ok(ActionResult::None)
             }
-            RuntimeAction::EvalJavascript { id, matches, depth } => Ok(self
-                .script_engine
-                .run_script(&self.trigger_manager, id, &matches, depth)
-                .unwrap_or_else(|err| ActionResult::Echo(format!("JavaScript Error: {:?}", err)))),
-            RuntimeAction::CallJavascriptFunction { id, matches, depth } => Ok(self
-                .script_engine
-                .call_javascript_function(&self.trigger_manager, id, &matches, depth)
-                .unwrap_or_else(|err| {
-                    ActionResult::Echo(format!("Error in Javascript Function: {:?}", err))
-                })),
+            RuntimeAction::SendRawUnless(is_captured, str) => {
+                if is_captured.load(Ordering::Relaxed) {
+                    return Ok(ActionResult::None);
+                }
+
+                for line in str.split('\n') {
+                    if let Some(fut) = self.send(line)? {
+                        fut.await?;
+                    }
+                }
+                if let Some(fut) = self.flush_buffer_updates()? {
+                    fut.await?;
+                }
+                Ok(ActionResult::None)
+            }
+            RuntimeAction::EvalJavascript {
+                id,
+                matches,
+                depth,
+                is_captured,
+            } => {
+                self.script_engine.set_is_captured(true);
+
+                let result = self
+                    .script_engine
+                    .run_script(&self.trigger_manager, id, &matches, depth)
+                    .unwrap_or_else(|err| {
+                        ActionResult::Echo(format!("JavaScript Error: {:?}", err))
+                    });
+
+                if self.script_engine.get_is_captured() {
+                    if let Some(is_captured) = is_captured {
+                        is_captured.store(true, Ordering::Relaxed);
+                    }
+                }
+
+                Ok(result)
+            }
+            RuntimeAction::CallJavascriptFunction {
+                id,
+                matches,
+                depth,
+                is_captured,
+            } => {
+                self.script_engine.set_is_captured(true);
+
+                let result = self
+                    .script_engine
+                    .call_javascript_function(&self.trigger_manager, id, &matches, depth)
+                    .unwrap_or_else(|err| {
+                        ActionResult::Echo(format!("Error in Javascript Function: {:?}", err))
+                    });
+
+                if self.script_engine.get_is_captured() {
+                    if let Some(is_captured) = is_captured {
+                        is_captured.store(true, Ordering::Relaxed);
+                    }
+                }
+
+                Ok(result)
+            }
             RuntimeAction::AddHotkey {
                 name: _name,
                 hotkey,
@@ -769,19 +848,28 @@ impl<'a> Inner<'a> {
                     .await?;
                 Ok(ActionResult::None)
             }
-            RuntimeAction::PerformLineOperation { line_number, operation } => {
-
-                self.ui_tx.send(TaggedSessionEvent {
-                    session_id: self.session_id,
-                    event: SessionEvent::PerformLineOperation { line_number, operation },
-                }).await?;
+            RuntimeAction::PerformLineOperation {
+                line_number,
+                operation,
+            } => {
+                self.ui_tx
+                    .send(TaggedSessionEvent {
+                        session_id: self.session_id,
+                        event: SessionEvent::PerformLineOperation {
+                            line_number,
+                            operation,
+                        },
+                    })
+                    .await?;
                 Ok(ActionResult::None)
             }
-            RuntimeAction::SelectMapperArea(id) => {
-                self.ui_tx.send(TaggedSessionEvent {
-                    session_id: self.session_id,
-                    event: SessionEvent::SelectMapperArea(id)
-                }).await?;
+            RuntimeAction::SetCurrentLocation(id, room_number) => {
+                self.ui_tx
+                    .send(TaggedSessionEvent {
+                        session_id: self.session_id,
+                        event: SessionEvent::SetCurrentLocation(id, room_number),
+                    })
+                    .await?;
                 Ok(ActionResult::None)
             }
             RuntimeAction::Reload => Ok(ActionResult::Reload),
@@ -814,10 +902,13 @@ impl<'a> Inner<'a> {
             let atlas = mapper.get_current_atlas();
 
             for area in atlas.areas() {
-                self.echo_str_sync(&format!("Loaded map area: {} ({})", area.get_name(), area.get_id()));
+                self.echo_str_sync(&format!(
+                    "Loaded map area: {} ({})",
+                    area.get_name(),
+                    area.get_id()
+                ));
             }
         }
-
 
         if let Err(e) = self
             .ui_tx
@@ -830,24 +921,26 @@ impl<'a> Inner<'a> {
             error!("Failed to send runtime ready event: {:?}", e);
         }
 
-
         loop {
-            // Phase 1: Always poll script engine once per iteration (non-blocking)
-            
-
+            // Phase 1: Poll script engine until no more immediate work is available
             std::future::poll_fn(|cx| {
-                Poll::Ready(match self.script_engine.poll_event_loop(cx) {
-                    Poll::Ready(result) => {
-                        if let Err(err) = result {
-                            warn!("Error in script engine event loop: {err:?}");
-                             self.echo_warn_str_sync(format!("{err:?}").as_str());
+                loop {
+                    match self.script_engine.poll_event_loop(cx) {
+                        Poll::Ready(Ok(())) => {
+                            // Event loop completed some work, continue polling immediately
+                            continue;
                         }
-                        // Event loop completed some work, continue to action processing
+                        Poll::Ready(Err(err)) => {
+                            warn!("Error in script engine event loop: {err:?}");
+                            self.echo_warn_str_sync(format!("{err:?}").as_str());
+                            return Poll::Ready(());
+                        }
+                        Poll::Pending => {
+                            // No more work available right now, continue to action processing
+                            return Poll::Ready(());
+                        }
                     }
-                    Poll::Pending => {
-                        // Event loop is waiting for async operations, continue to action processing
-                    }
-                })
+                }
             })
             .await;
 

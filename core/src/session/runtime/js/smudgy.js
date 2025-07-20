@@ -23,6 +23,7 @@ const {
     op_smudgy_line_replace,
     op_smudgy_line_highlight,
     op_smudgy_line_remove,
+    op_smudgy_capture,
 
 } = Deno.core.ops;
 
@@ -564,6 +565,7 @@ const buffer = {
 };
 Object.defineProperty(globalThis, "line", { value: line });
 Object.defineProperty(globalThis, "buffer", { value: buffer });
+Object.defineProperty(globalThis, "capture", { value: op_smudgy_capture });
 Object.defineProperty(globalThis, "createAlias", { value: createAlias });
 Object.defineProperty(globalThis, "createTrigger", { value: createTrigger });
 Object.defineProperty(globalThis, "createTriggers", { value: createTriggers });

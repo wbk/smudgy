@@ -2,8 +2,9 @@ use crate::components::session_input;
 use crate::theme::Element;
 use crate::widgets::split_terminal_pane;
 use iced::futures::StreamExt;
-use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Length, Subscription, Task};
+use iced::widget::{button, column, container, mouse_area, row, stack, text};
+use iced::{Length, Padding, Subscription, Task};
+use iced_jsx::IcedJsxRoot;
 use log::info;
 use smudgy_core::models::aliases::load_aliases;
 use smudgy_core::models::hotkeys::load_hotkeys;
@@ -25,7 +26,6 @@ use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 
 /// Represents a connection session to a server with a specific profile
-#[derive(Debug)]
 pub struct SessionPane {
     pub id: SessionId,
     /// The name of the server this session is connected to
@@ -42,6 +42,8 @@ pub struct SessionPane {
     terminal_buffer: Rc<RefCell<TerminalBuffer>>,
     terminal_pane_selection: Rc<RefCell<Selection>>,
 
+    jsx_widgets: IcedJsxRoot<'static, (), crate::Theme, crate::Renderer>,
+
     runtime_tx: Option<mpsc::UnboundedSender<RuntimeAction>>,
 
     connected: bool,
@@ -55,9 +57,10 @@ pub enum Message {
     Send(Arc<String>),
     SessionEvent(SessionEvent),
     HotkeyTriggered(HotkeyId),
-    SelectMapperArea(AreaId),
+    SetMapperCurrentLocation(AreaId, Option<i32>),
     Reload,
     Reconnect,
+    WidgetMessage,
 }
 
 impl SessionPane {
@@ -83,6 +86,8 @@ impl SessionPane {
             )))
         });
 
+        let jsx_widgets = IcedJsxRoot::new();
+
         Self {
             id,
             session_params: Arc::new(SessionParams {
@@ -91,6 +96,7 @@ impl SessionPane {
                 profile_name: Arc::new(profile_name.clone()),
                 profile_subtext,
                 mapper: mapper.clone(),
+                jsx_widgets: IcedJsxRoot::clone(&jsx_widgets),
             }),
             server_name,
             profile_name,
@@ -100,6 +106,7 @@ impl SessionPane {
             runtime_tx: None,
             connected: false,
             mapper,
+            jsx_widgets,
         }
     }
 
@@ -125,7 +132,7 @@ impl SessionPane {
                 // This message is handled by the parent (SmudgyWindow)
                 Task::none()
             }
-            Message::SelectMapperArea(_) => {
+            Message::SetMapperCurrentLocation(_, _) => {
                 // This message is handled by the parent (SmudgyWindow)
                 Task::none()
             }
@@ -235,8 +242,8 @@ impl SessionPane {
                             .perform_line_operation(line_number, operation);
                         return Task::none();
                     }
-                    SessionEvent::SelectMapperArea(area_id) => {
-                        return Task::done(Message::SelectMapperArea(area_id));
+                    SessionEvent::SetCurrentLocation(area_id, room_number) => {
+                        return Task::done(Message::SetMapperCurrentLocation(area_id, room_number));
                     }
                     SessionEvent::Connected => {
                         self.connected = true;
@@ -280,6 +287,9 @@ impl SessionPane {
 
                 return Task::none();
             }
+            Message::WidgetMessage => {
+                return Task::none();
+            }
         }
     }
 
@@ -321,12 +331,15 @@ impl SessionPane {
                 .height(Length::Fill)
         };
 
-        // Apply different styling based on active state
-        container(content)
-            .padding(10)
+        let widgets = self.jsx_widgets.view().map(|_| Message::WidgetMessage);
+
+        stack![
+            container(content)
+            .padding(Padding {top: 0.0, right: 10.0, bottom: 10.0, left: 10.0})
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill),
+            widgets
+        ].into()
     }
 }
 

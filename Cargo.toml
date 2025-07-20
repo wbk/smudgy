@@ -6,14 +6,16 @@ resolver = "2"
 [workspace.dependencies]
 arc-swap = { version = "1.7.1", features = ["weak"] }
 anyhow = "1.0.98"
-iced = { git = "https://github.com/wbk/iced", rev = "983aafb24b7b5bfa95eab1efc38e9eb928137b27", features = [
+iced = { version = "0.14.0-dev", features = [
     "tokio",
     "svg",
     "web-colors",
     "highlighter",
     "advanced",
     "canvas",
+    "debug"
 ] }
+iced_anim = { git = "https://github.com/wbk/iced_anim", rev = "2a0414e" }
 derive_more = { version = "2.0.1", features = [
     "display",
     "from",
@@ -29,7 +31,9 @@ cfg-if = "1.0.0"
 regex = "1"
 hyperscan = "0.3.2"
 smudgy_core = { path = "./core" }
+smudgy_theme = { path = "./theme" }
 smudgy_map = { path = "./map", features = ["cloud"] }
+iced_jsx = { path = "./iced_jsx" }
 tokio = { version = "1.44.2", features = ["full"] }
 parking_lot = "0.12.1"
 pretty_env_logger = "0.5.0"
@@ -71,3 +75,6 @@ debug = true
 [profile.release-full]
 inherits = "release"
 lto = true
+
+[patch.crates-io]
+iced = { git = "https://github.com/wbk/iced", rev = "983aafb24b7b5bfa95eab1efc38e9eb928137b27" }

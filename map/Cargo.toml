@@ -18,7 +18,6 @@ thiserror = "2.0.12"
 # HTTP client for CloudMapper
 reqwest = { version = "0.12.8", features = ["json"] }
 tokio = { workspace = true, features = ["rt"] }
-dashmap = "6.1.0"
 arc-swap = { workspace = true }
 
 [features]

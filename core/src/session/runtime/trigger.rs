@@ -1,11 +1,26 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexSet, RegexSetBuilder};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::session::{runtime::{script_engine::{FunctionId, ScriptId}, RuntimeAction}, styled_line::StyledLine};
 use super::ScriptAction;
+use crate::session::{
+    runtime::{
+        RuntimeAction,
+        script_engine::{FunctionId, ScriptId},
+    },
+    styled_line::StyledLine,
+};
 
 // limit regex size to 512MB
 const MAX_REGEX_SIZE: usize = 512 * 1024 * 1024;
@@ -380,7 +395,8 @@ impl Manager {
         regex_set_to_triggers_map: &[usize],
         regex_set_to_patterns_map: &[usize],
         match_type: TriggerMatchType,
-    ) -> Result<bool> {
+        is_captured: Option<Arc<AtomicBool>>,
+    ) -> Result<()> {
         if depth > 100 {
             bail!(
                 "Script processor bailing, depth limit reached. Do you have an alias that triggers itself?"
@@ -393,7 +409,7 @@ impl Manager {
         let start = std::time::Instant::now();
         let matches: Vec<_> = matches.iter().collect();
         debug!("Time to collect regex matches: {:?}", start.elapsed());
-        let mut fired = false;
+
         if !matches.is_empty() {
             for match_indices in matches.chunk_by(|a, b| {
                 regex_set_to_triggers_map.get(*a).unwrap()
@@ -419,6 +435,7 @@ impl Manager {
                     line,
                     match_type,
                     pattern_idx,
+                    &is_captured,
                     &self.session_runtime_tx,
                     depth + 1,
                 )? {
@@ -426,11 +443,9 @@ impl Manager {
                         self.process_nested_outgoing_line(&line, depth + 1)?;
                     }
                 }
-
-                fired = true;
             }
         }
-        Ok(fired)
+        Ok(())
     }
 
     pub fn process_outgoing_line(&self, line: &str) -> Result<()> {
@@ -438,7 +453,9 @@ impl Manager {
     }
 
     pub fn process_nested_outgoing_line(&self, line: &str, depth: u32) -> Result<()> {
-        if !self.process_line_inner(
+        let is_captured = Arc::new(AtomicBool::new(false));
+
+        self.process_line_inner(
             line,
             depth,
             &self.alias_regex_set,
@@ -446,11 +463,15 @@ impl Manager {
             &self.alias_regex_set_map,
             &self.alias_regex_patterns_map,
             TriggerMatchType::Normal,
-        )? {
-            self.session_runtime_tx
-                .send(RuntimeAction::SendRaw(Arc::new(line.to_string())))
-                .context("Could not send outgoing line to runtime")?;
-        }
+            Some(is_captured.clone()),
+        );
+
+        self.session_runtime_tx
+            .send(RuntimeAction::SendRawUnless(
+                is_captured,
+                Arc::new(line.to_string()),
+            ))
+            .context("Could not send outgoing line to runtime")?;
         Ok(())
     }
 
@@ -473,6 +494,7 @@ impl Manager {
                 &self.raw_trigger_regex_set_map,
                 &self.raw_trigger_regex_patterns_map,
                 TriggerMatchType::Raw,
+                None,
             )?;
         }
 
@@ -484,6 +506,7 @@ impl Manager {
             &self.trigger_regex_set_map,
             &self.trigger_regex_patterns_map,
             TriggerMatchType::Normal,
+            None,
         )?;
 
         let end = start.elapsed();
@@ -508,6 +531,7 @@ impl Manager {
                 &self.prompt_raw_trigger_regex_set_map,
                 &self.prompt_raw_trigger_regex_patterns_map,
                 TriggerMatchType::Raw,
+                None,
             )?;
         }
 
@@ -519,6 +543,7 @@ impl Manager {
             &self.prompt_trigger_regex_set_map,
             &self.prompt_trigger_regex_patterns_map,
             TriggerMatchType::Normal,
+            None,
         )?;
 
         let end = start.elapsed();
@@ -620,6 +645,7 @@ impl Trigger {
         line: &str,
         match_type: TriggerMatchType,
         pattern_idx: usize,
+        is_captured: &Option<Arc<AtomicBool>>,
         runtime_action_tx: &UnboundedSender<RuntimeAction>,
         depth: u32,
     ) -> Result<Option<Vec<String>>> {
@@ -649,15 +675,17 @@ impl Trigger {
                     id: script_id,
                     depth,
                     matches: captures,
+                    is_captured: is_captured.clone(),
                 })?;
 
                 Ok(None)
-           }
+            }
             ScriptAction::CallJavascriptFunction(function_id) => {
                 runtime_action_tx.send(RuntimeAction::CallJavascriptFunction {
                     id: function_id,
                     depth,
-                    matches: captures
+                    matches: captures,
+                    is_captured: is_captured.clone(),
                 })?;
 
                 Ok(None)
@@ -668,6 +696,10 @@ impl Trigger {
                     evaluated = evaluated.replace(k, v);
                 });
 
+                if let Some(is_captured) = is_captured {
+                    is_captured.store(true, Ordering::Relaxed);
+                }
+
                 Ok(Some(
                     evaluated
                         .split(line_splitter)
@@ -677,6 +709,11 @@ impl Trigger {
             }
             ScriptAction::SendRaw(ref script) => {
                 runtime_action_tx.send(RuntimeAction::SendRaw(script.clone()))?;
+
+                if let Some(is_captured) = is_captured {
+                    is_captured.store(true, Ordering::Relaxed);
+                }
+
                 Ok(None)
             }
             ScriptAction::Noop => Ok(None),

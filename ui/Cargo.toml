@@ -7,9 +7,12 @@ build = "build.rs"
 [dependencies]
 smudgy_core = { workspace = true }
 smudgy_map = { workspace = true }
+smudgy_theme = { workspace = true }
 anyhow = { workspace = true }
 iced = { workspace = true }
+iced_anim = { workspace = true }
 log = { workspace = true }
+iced_jsx = { workspace = true }
 
 validator.workspace = true
 tokio.workspace = true

@@ -12,7 +12,6 @@ use iced::window;
 use iced::window::settings::PlatformSpecific;
 use iced::{Size, Subscription, Task, futures};
 use smudgy_map::{AreaId, Mapper};
-use theme::Element;
 
 // Core session imports
 use windows::script_editor_window::{self, Event as ScriptEditorWindowEvent, ScriptEditorWindow};
@@ -20,9 +19,11 @@ use windows::smudgy_window::SmudgyWindow;
 
 mod assets;
 mod modal;
-mod theme;
 mod toolbar;
 mod widgets;
+
+pub use smudgy_theme::{Element, Theme, self as theme};
+
 
 mod components;
 
@@ -45,7 +46,6 @@ use crate::windows::smudgy_window;
 
 extern crate log;
 
-pub type Theme = crate::theme::Theme;
 pub type Renderer = iced::Renderer;
 
 // Main application state
@@ -87,7 +87,7 @@ enum Message {
     CreateMapEditorWindow {
         mapper: Mapper,
     },
-    SelectMapperArea(AreaId),
+    SetMapperCurrentLocation(AreaId, Option<i32>),
 }
 
 fn init() -> (Smudgy, Task<Message>) {
@@ -112,9 +112,9 @@ fn main() -> anyhow::Result<()> {
     iced::daemon(init, update, view)
         .theme(|smudgy, window_id| {
             if smudgy.smudgy_windows.contains_key(&window_id) {
-                theme::smudgy()
+                smudgy_theme::smudgy()
             } else {
-                theme::secondary()
+                smudgy_theme::secondary()
             }
         })
         .subscription(subscription)
@@ -192,12 +192,12 @@ fn update(smudgy: &mut Smudgy, message: Message) -> Task<Message> {
                             Task::done(Message::CreateMapEditorWindow { mapper }),
                         ])
                     }
-                    Some(SmudgyWindowEvent::SelectMapperArea(area_id)) => {
+                    Some(SmudgyWindowEvent::SetMapperCurrentLocation(area_id, room_number)) => {
                         Task::batch([
                             update
                                 .task
                                 .map(move |message| Message::SmudgyWindowMessage(id, message)),
-                            Task::done(Message::SelectMapperArea(area_id)),
+                            Task::done(Message::SetMapperCurrentLocation(area_id, room_number)),
                         ])
                     }
                     _ => update
@@ -298,10 +298,10 @@ fn update(smudgy: &mut Smudgy, message: Message) -> Task<Message> {
             smudgy.map_editor_windows.insert(id, window);
             Task::none()
         }
-        Message::SelectMapperArea(area_id) => {
+        Message::SetMapperCurrentLocation(area_id, room_number) => {
             // We shamelessly drop any response on this message in particular
-            for (id, window) in smudgy.map_editor_windows.iter_mut() {
-                    window.update(map_editor_window::Message::SelectArea(area_id));
+            for (_id, window) in smudgy.map_editor_windows.iter_mut() {
+                    window.update(map_editor_window::Message::SetCurrentLocation(area_id, room_number));
             }
             Task::none()
         }

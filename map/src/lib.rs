@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub use uuid::Uuid;
 
 /// Exit direction enum matching the backend
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Display)]
 pub enum ExitDirection {
     North,
     East,

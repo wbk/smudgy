@@ -169,6 +169,16 @@ impl AreaCache {
                             area_id,
                         },
                     });
+                } else {
+                    room_connections.push(RoomConnection {
+                        from_level: room.get_level(),
+                        from_x: room.get_x(),
+                        from_y: room.get_y(),
+                        from_direction: from_exit.from_direction,
+                        room: room.clone(),
+                        is_bidirectional,
+                        to: RoomConnectionEnd::None,
+                    });
                 }
             }
         }

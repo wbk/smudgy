@@ -1,4 +1,5 @@
 use iced::futures::{channel::mpsc::Sender, SinkExt, Stream, StreamExt};
+use iced_jsx::IcedJsxRoot;
 use runtime::RuntimeAction;
 use smudgy_map::{AreaId, Mapper};
 use std::{fmt::Debug, sync::Arc};
@@ -27,7 +28,7 @@ pub enum SessionEvent {
     RegisterHotkey(HotkeyId, HotkeyDefinition),
     UnregisterHotkey(HotkeyId),
     PerformLineOperation { line_number: usize, operation: LineOperation },
-    SelectMapperArea(AreaId),
+    SetCurrentLocation(AreaId, Option<i32>),
 }
 #[derive(Debug, Clone)]
 pub struct TaggedSessionEvent {
@@ -41,6 +42,7 @@ pub struct SessionParams {
     pub profile_name: Arc<String>,
     pub profile_subtext: Arc<String>,
     pub mapper: Option<Mapper>,
+    pub jsx_widgets: IcedJsxRoot<'static, (), smudgy_theme::Theme, iced::Renderer>,
 }
 
 #[derive(Display, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -79,6 +81,7 @@ pub fn spawn(params: Arc<SessionParams>) -> impl Stream<Item = TaggedSessionEven
             params.profile_name.clone(),
             params.profile_subtext.clone(),
             params.mapper.clone(),
+      params.jsx_widgets.clone(),
             ui_tx.clone(),
         );
 

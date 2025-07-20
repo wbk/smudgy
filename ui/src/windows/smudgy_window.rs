@@ -1,9 +1,7 @@
 use std::{rc::Rc, sync::Arc};
 
 use iced::{
-    Event as IcedEvent, Length, Subscription, Task,
-    alignment::{Horizontal, Vertical},
-    widget::{center, column, container, mouse_area, opaque, row, stack, text, text_input},
+    alignment::{Horizontal, Vertical}, widget::{center, column, container, mouse_area, opaque, row, stack, text, text_input}, Color, Event as IcedEvent, Length, Subscription, Task
 };
 use smudgy_core::session::{SessionId, TaggedSessionEvent};
 use smudgy_map::{AreaId, Mapper};
@@ -34,7 +32,7 @@ pub enum Message {
 pub enum Event {
     CreateNewScriptEditorWindow { server_name: Arc<String> },
     CreateNewMapEditorWindow { mapper: Mapper },
-    SelectMapperArea(AreaId),
+    SetMapperCurrentLocation(AreaId, Option<i32>),
 }
 
 pub struct SmudgyWindow {
@@ -195,6 +193,8 @@ impl SmudgyWindow {
                         // Set this as the active session (will deactivate others)
                         let focus_task = self.set_active_session(session_id);
 
+                        self.toolbar_expanded = false;
+
                         self.modal = None;
 
                         Update::with_task(focus_task)
@@ -206,6 +206,7 @@ impl SmudgyWindow {
                 Update::none()
             }
             Message::SetActiveSession(session_id) => {
+                // TODO: I'm not sure this is still used...
                 let focus_task = self.set_active_session(session_id);
                 Update::with_task(focus_task)
             }
@@ -234,12 +235,14 @@ impl SmudgyWindow {
                         } else {
                             Update::none()
                         }
-                    } else if let session_pane::Message::SelectMapperArea(area_id) = msg {
-                        // Handle the SelectMapperArea message that bubbles up from session inputs
-                        Update::with_event(Event::SelectMapperArea(area_id))
+                    } else if let session_pane::Message::SetMapperCurrentLocation(area_id, room_number) = msg {
+                        // Handle the SetMapperCurrentLocation message that bubbles up from session inputs
+                        Update::with_event(Event::SetMapperCurrentLocation(area_id, room_number))
                     } else {
                         // Handle the Activate message that bubbles up from session inputs
                         if let session_pane::Message::Activate = msg {
+                            self.toolbar_expanded = false;
+
                             let focus_task = self.set_active_session(session_id);
                             Update::with_task(focus_task)
                         } else {

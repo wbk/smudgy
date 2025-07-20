@@ -46,7 +46,8 @@ deno_core::extension!(
     op_smudgy_gag,
     op_smudgy_get_current_line,
     op_smudgy_get_current_line_number,
-    op_smudgy_select_area,
+    op_smudgy_mapper_set_current_location,
+    op_smudgy_capture,
     ],
   options = {
     session_id: SessionId,
@@ -63,8 +64,11 @@ deno_core::extension!(
     state.put::<Rc<RefCell<Vec<LineOperation>>>>(options.pending_line_operations);
     state.put::<Rc<RefCell<Weak<StyledLine>>>>(options.current_line);
     state.put::<std::rc::Weak<Cell<usize>>>(options.emitted_line_count);
+    state.put::<Capture>(Capture(false));
   },
 );
+
+pub struct Capture(pub bool);
 
 #[op2(fast)]
 fn op_smudgy_get_current_session(state: &mut OpState) -> u32 {
@@ -808,10 +812,16 @@ fn op_smudgy_line_remove(state: &mut OpState, line_number: u32, begin: u32, end:
 
 #[allow(clippy::inline_always)]
 #[op2]
-fn op_smudgy_select_area(state: &mut OpState, #[serde] area_id: (u64, u64)) {
+fn op_smudgy_mapper_set_current_location(state: &mut OpState, #[serde] area_id: (u64, u64), room_number: Option<i32>) {
     // Get the runtime tx from OpState
     let tx = state.borrow::<UnboundedSender<RuntimeAction>>();
 
     let area_id = AreaId(Uuid::from_u64_pair(area_id.0, area_id.1));
-    let _ = tx.send(RuntimeAction::SelectMapperArea(area_id));
+    let _ = tx.send(RuntimeAction::SetCurrentLocation(area_id, room_number));
+}
+
+#[op2(fast)]
+fn op_smudgy_capture(state: &mut OpState, value: bool) {
+    let captured = state.borrow_mut::<Capture>();
+    captured.0 = value;
 }

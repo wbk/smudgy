@@ -176,6 +176,10 @@ impl Mapper {
         self.inner.update_exit(room_key, exit_id, updates);
     }
 
+    pub fn delete_exit(&self, room_key: RoomKey, exit_id: ExitId) {
+        self.inner.delete_exit(room_key, exit_id);
+    }
+
     pub fn create_exit(&self, room_key: RoomKey, args: ExitArgs) -> impl Future<Output = MapResult<ExitId>> {
         self.inner.create_exit(room_key, args)
     }
@@ -299,7 +303,7 @@ impl Inner {
         self.atlas_cache.rcu(|cache| {
             cache
                 .get_area(&area_id)
-                .map(|area| {
+                .map(|_area| {
                     Arc::new(cache.delete_area(area_id.clone()))
                 })
                 .unwrap_or_else(|| cache.clone())
@@ -441,6 +445,21 @@ impl Inner {
         ));
     }
 
+    pub fn delete_exit(&self, room_key: RoomKey, exit_id: ExitId) {
+        self.atlas_cache.rcu(|cache| {
+            cache
+                .get_area(&room_key.area_id)
+                .map(|area| {
+                    area.delete_exit(room_key.room_number, exit_id.clone())
+                        .ok()
+                })
+                .flatten()
+                .map(|area| Arc::new(cache.insert_area(area.get_id().clone(), Arc::new(area))))
+                .unwrap_or_else(|| cache.clone())
+        });
+
+        self.send_sync_operation(AreaSyncOperation::DeleteExit(room_key.area_id, exit_id));
+    }
     // === SLOW CREATE OPERATIONS (Wait for Backend ID) ===
 
     /// Create exit (waits for backend to assign ID)

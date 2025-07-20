@@ -77,6 +77,18 @@ declare const op_smudgy_session_echo: any;
 declare const op_smudgy_session_reload: any;
 declare const op_smudgy_session_send: any;
 declare const op_smudgy_session_send_raw: any;
+declare const op_smudgy_insert: any;
+declare const op_smudgy_replace: any;
+declare const op_smudgy_highlight: any;
+declare const op_smudgy_remove: any;
+declare const op_smudgy_gag: any;
+declare const op_smudgy_get_current_line: any;
+declare const op_smudgy_get_current_line_number: any;
+declare const op_smudgy_line_insert: any;
+declare const op_smudgy_line_replace: any;
+declare const op_smudgy_line_highlight: any;
+declare const op_smudgy_line_remove: any;
+declare const op_smudgy_capture: any;
 /**
  * @typedef {Object} Character
  * @property {string} [name]
@@ -155,7 +167,126 @@ declare function send(line: string): void;
  * @param {string} line - The raw line of text to send
  */
 declare function sendRaw(line: string): void;
-declare function echo(line: any): void;
+/**
+ * Echoes a line of text to the current session's output.
+ * @param {string} line - The line of text to echo
+ */
+declare function echo(line: string): void;
+declare namespace line {
+    /**
+     * Inserts text at the specified position with optional styling
+     * @param {string} text - The text to insert
+     * @param {number} begin - The start position to insert at
+     * @param {number} [end] - The end position (for replacement), defaults to begin
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    function insert(text: string, begin: number, end?: number, options?: {
+        fg?: string | any;
+        bg?: string | any;
+    }): void;
+    /**
+     * Replaces text in the specified range
+     * @param {string} text - The replacement text
+     * @param {number} begin - The start position to replace
+     * @param {number} end - The end position to replace
+     */
+    function replaceAt(text: string, begin: number, end: number): void;
+    /**
+     * Highlights text in the specified range with the given colors
+     * @param {number} begin - The start position to highlight
+     * @param {number} end - The end position to highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    function highlightAt(begin: number, end: number, options?: {
+        fg?: string | any;
+        bg?: string | any;
+    }): void;
+    /**
+     * Removes text in the specified range
+     * @param {number} begin - The start position to remove
+     * @param {number} end - The end position to remove
+     */
+    function removeAt(begin: number, end: number): void;
+    /**
+     * Replaces the first occurrence of oldStr with newStr in the current line
+     * @param {string} oldStr - The text to find and replace
+     * @param {string} newStr - The replacement text
+     * @returns {boolean} True if the text was found and replaced, false otherwise
+     */
+    function replace(oldStr: string, newStr: string): boolean;
+    /**
+     * Highlights the first occurrence of str in the current line
+     * @param {string} str - The text to find and highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @returns {boolean} True if the text was found and highlighted, false otherwise
+     */
+    function highlight(str: string, options?: {
+        fg?: string | any;
+        bg?: string | any;
+    }): boolean;
+    /**
+     * Removes the first occurrence of str from the current line
+     * @param {string} str - The text to find and remove
+     * @returns {boolean} True if the text was found and removed, false otherwise
+     */
+    function remove(str: string): boolean;
+    /**
+     * Prevents the current line from being displayed (gags it completely)
+     */
+    function gag(): void;
+    const text: any;
+    const number: any;
+}
+declare namespace buffer {
+    /**
+     * Inserts text at the specified position with optional styling
+     * @param {number} line_number - The line number to insert at
+     * @param {string} text - The text to insert
+     * @param {number} begin - The start position to insert at
+     * @param {number} [end] - The end position (for replacement), defaults to begin
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    function insert(line_number: number, text: string, begin: number, end?: number, options?: {
+        fg?: string | any;
+        bg?: string | any;
+    }): void;
+    /**
+     * Replaces text in the specified range
+     * @param {number} line_number - The line number to replace at
+     * @param {string} text - The replacement text
+     * @param {number} begin - The start position to replace
+     * @param {number} end - The end position to replace
+     */
+    function replaceAt(line_number: number, text: string, begin: number, end: number): void;
+    /**
+     * Highlights text in the specified range with the given colors
+     * @param {number} line_number - The line number to highlight at
+     * @param {number} begin - The start position to highlight
+     * @param {number} end - The end position to highlight
+     * @param {Object} [options] - Styling options
+     * @param {string|Object} [options.fg] - Foreground color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     * @param {string|Object} [options.bg] - Background color (string like "red" or RGB object {r,g,b} or ANSI object {color,bold})
+     */
+    function highlightAt(line_number: number, begin: number, end: number, options?: {
+        fg?: string | any;
+        bg?: string | any;
+    }): void;
+    /**
+     * Removes text in the specified range
+     * @param {number} line_number - The line number to remove at
+     * @param {number} begin - The start position to remove
+     * @param {number} end - The end position to remove
+     */
+    function removeAt(line_number: number, begin: number, end: number): void;
+}
 type TriggerDef = {
     /**
      * - The pattern(s) to match.

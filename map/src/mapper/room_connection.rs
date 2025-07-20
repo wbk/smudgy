@@ -15,6 +15,7 @@ pub struct RoomConnection {
 
 #[derive(Debug, Clone)]
 pub enum RoomConnectionEnd {
+    None,
     External {
         area_id: AreaId,
     },

@@ -4,15 +4,14 @@ use std::sync::Arc;
 use crate::assets::{self, bootstrap_icons, fonts};
 use crate::components::Update;
 use crate::helpers::hotkeys::{self as hotkey_helpers, MaybePhysicalKey};
-use crate::theme::builtins::{self, button};
 use crate::theme::Element as ThemedElement;
+use crate::theme::builtins::{self, button};
 use crate::widgets::hotkey_input::HotkeyInput;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::Weight;
 use iced::keyboard::Key;
 use iced::widget::{
-    self, Column, column, container, radio, row, scrollable, text, text_editor,
-    text_input, tooltip,
+    self, Column, column, container, radio, row, scrollable, text, text_editor, text_input, tooltip,
 };
 use iced::{Element, Font, Length, Padding, Task};
 use smudgy_core::models::aliases::AliasDefinition;
@@ -27,7 +26,7 @@ pub enum Message {
     ReloadScripts,
     ScriptsLoaded(BTreeMap<String, Script>, Arc<Vec<String>>),
     ShowErrorPane(Arc<Vec<String>>),
-    ScriptSelected(String, Script),
+    ScriptSelected(Option<Box<str>>, Box<str>, Script),
 
     SetScriptName(String),
     SetScriptLanguage(ScriptLang),
@@ -55,7 +54,7 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    ScriptsChanged { server_name: String }
+    ScriptsChanged { server_name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +128,17 @@ pub enum Pane {
     ),
 }
 
+struct ScriptKey {
+    pub folder_name: Option<Box<str>>,
+    pub script_name: Box<str>,
+}
+
+impl PartialEq for ScriptKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.folder_name == other.folder_name && self.script_name == other.script_name
+    }
+}
+
 impl Script {
     fn folder_name(&self) -> Option<&str> {
         match self {
@@ -143,7 +153,7 @@ pub struct ScriptEditorWindow {
     server_name: String,
     scripts: BTreeMap<String, Script>,
     scripts_flat: Vec<ScriptListItem>,
-    selected_index: Option<usize>,
+    selected_script: Option<ScriptKey>,
     pane: Pane,
     hotkey_state: Vec<MaybePhysicalKey>,
     editor_content: text_editor::Content,
@@ -158,7 +168,7 @@ impl ScriptEditorWindow {
             scripts: BTreeMap::new(),
             scripts_flat: Vec::new(),
             pane: Default::default(),
-            selected_index: None,
+            selected_script: None,
             editor_content: text_editor::Content::new(),
             hotkey_state: Vec::new(),
         }
@@ -217,14 +227,14 @@ impl ScriptEditorWindow {
     }
 
     /// Extracts all scripts of a specific type from the hierarchical structure.
-    /// 
+    ///
     /// This method flattens the folder hierarchy and collects all scripts that match
     /// the provided extraction function. The extraction function should return `Some(T)`
     /// for scripts of the desired type and `None` for others.
-    /// 
+    ///
     /// # Arguments
     /// * `extract_fn` - A function that attempts to extract a script of type T from a Script enum
-    /// 
+    ///
     /// # Returns
     /// A HashMap mapping script names to their extracted definitions
     fn extract_scripts_by_type<T, F>(&self, extract_fn: F) -> std::collections::HashMap<String, T>
@@ -238,10 +248,10 @@ impl ScriptEditorWindow {
     }
 
     /// Recursively traverses the folder hierarchy to extract scripts.
-    /// 
+    ///
     /// This method walks through the BTreeMap structure, drilling down into folders
     /// and applying the extraction function to leaf scripts.
-    /// 
+    ///
     /// # Arguments
     /// * `scripts` - The current level of the script hierarchy
     /// * `result` - The accumulating HashMap of extracted scripts
@@ -272,15 +282,15 @@ impl ScriptEditorWindow {
     }
 
     /// Serializes all scripts to their respective JSON files.
-    /// 
+    ///
     /// This method extracts all aliases, hotkeys, and triggers from the hierarchical
-    /// structure and saves them to their respective JSON files (aliases.json, 
+    /// structure and saves them to their respective JSON files (aliases.json,
     /// hotkeys.json, triggers.json) in the server directory.
-    /// 
+    ///
     /// The hierarchical structure is flattened during serialization, as the JSON
     /// files store scripts in a flat map where the package field determines folder
     /// organization.
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` if all scripts were successfully serialized
     /// * `Err(...)` if any serialization step failed
@@ -346,7 +356,7 @@ impl ScriptEditorWindow {
         if scripts.remove(name).is_some() {
             return true;
         }
-        
+
         for (_, script) in scripts.iter_mut() {
             if let Script::Folder(_, folder_scripts) = script {
                 if Self::remove_script_recursive(folder_scripts, name) {
@@ -354,17 +364,19 @@ impl ScriptEditorWindow {
                 }
             }
         }
-        
+
         false
     }
 
     /// Converts a HotkeyDefinition back to Vec<MaybePhysicalKey> format
     /// for initializing the HotkeyInput widget with existing shortcuts
-    fn hotkey_definition_to_maybe_physical_keys(hotkey: &hotkeys::HotkeyDefinition) -> Vec<MaybePhysicalKey> {
+    fn hotkey_definition_to_maybe_physical_keys(
+        hotkey: &hotkeys::HotkeyDefinition,
+    ) -> Vec<MaybePhysicalKey> {
         use iced::keyboard::{Key, key::Named};
-        
+
         let mut keys = Vec::new();
-        
+
         // Add modifiers first
         for modifier in &hotkey.modifiers {
             let modifier_key = match modifier.as_str() {
@@ -376,11 +388,11 @@ impl ScriptEditorWindow {
             };
             keys.push(modifier_key);
         }
-        
+
         // Add the main key
         let main_key = hotkey_helpers::hotkey_to_maybe_physical_key(hotkey);
         keys.push(main_key);
-        
+
         keys
     }
 
@@ -398,7 +410,12 @@ impl ScriptEditorWindow {
                 self.pane = Pane::ErrorPane(errors);
                 Update::none()
             }
-            Message::ScriptSelected(name, script) => {
+            Message::ScriptSelected(folder_name, name, script) => {
+                self.selected_script = Some(ScriptKey {
+                    folder_name: folder_name,
+                    script_name: name.clone(),
+                });
+
                 // Don't allow editing folders
                 if matches!(script, Script::Folder(_, _)) {
                     return Update::none();
@@ -421,10 +438,10 @@ impl ScriptEditorWindow {
 
                 self.pane = Pane::ScriptEditor(
                     ScriptEditorMode::Edit,
-                    Some(name.clone()), // original_name
-                    Some(name),         // current name
+                    Some(name.to_string()), // original_name
+                    Some(name.to_string()), // current name
                     script,
-                    None,               // no error
+                    None, // no error
                 );
                 Update::none()
             }
@@ -565,14 +582,17 @@ impl ScriptEditorWindow {
 
                 // Serialize all scripts to disk
                 if let Err(serialize_error) = self.serialize_scripts() {
-                    return self.update(Message::ShowErrorPane(Arc::new(vec![
-                        format!("Failed to save after delete: {}", serialize_error),
-                    ])));
+                    return self.update(Message::ShowErrorPane(Arc::new(vec![format!(
+                        "Failed to save after delete: {}",
+                        serialize_error
+                    )])));
                 }
 
                 // Return to welcome pane
                 self.pane = Pane::WelcomePane;
-                Update::with_event(Event::ScriptsChanged { server_name: self.server_name.clone() })
+                Update::with_event(Event::ScriptsChanged {
+                    server_name: self.server_name.clone(),
+                })
             }
             Message::SaveScript => {
                 // Extract values from pane to avoid borrowing issues
@@ -587,7 +607,8 @@ impl ScriptEditorWindow {
                         }
 
                         if !name.chars().all(|c| c.is_alphanumeric()) {
-                            *error = Some("Name can only contain alphanumeric characters".to_string());
+                            *error =
+                                Some("Name can only contain alphanumeric characters".to_string());
                             return Update::none();
                         }
 
@@ -627,7 +648,10 @@ impl ScriptEditorWindow {
                 let mut updated_script = script;
                 if let Script::Hotkey(ref mut hotkey) = updated_script {
                     if !self.hotkey_state.is_empty() {
-                                                    hotkey_helpers::set_key_and_modifiers_from_maybe_physical(hotkey, self.hotkey_state.clone());
+                        hotkey_helpers::set_key_and_modifiers_from_maybe_physical(
+                            hotkey,
+                            self.hotkey_state.clone(),
+                        );
                     }
                 }
 
@@ -640,12 +664,10 @@ impl ScriptEditorWindow {
                         script: Some(self.editor_content.text()),
                         ..hotkey
                     }),
-                    Script::Trigger(trigger) => {
-                        Script::Trigger(triggers::TriggerDefinition {
-                            script: Some(self.editor_content.text()),
-                            ..trigger
-                        })
-                    }
+                    Script::Trigger(trigger) => Script::Trigger(triggers::TriggerDefinition {
+                        script: Some(self.editor_content.text()),
+                        ..trigger
+                    }),
                     Script::Folder(_, _) => return Update::none(),
                 };
 
@@ -681,12 +703,15 @@ impl ScriptEditorWindow {
                 }
 
                 // Update pane state
-                if let Pane::ScriptEditor(ref mut mode, ref mut original_name, _, _, _) = self.pane {
+                if let Pane::ScriptEditor(ref mut mode, ref mut original_name, _, _, _) = self.pane
+                {
                     *mode = ScriptEditorMode::Edit;
                     *original_name = Some(name);
                 }
 
-                Update::with_event(Event::ScriptsChanged { server_name: self.server_name.clone() })
+                Update::with_event(Event::ScriptsChanged {
+                    server_name: self.server_name.clone(),
+                })
             }
             Message::MarkHotkeyState(keys) => {
                 self.hotkey_state = keys;
@@ -861,10 +886,11 @@ impl ScriptEditorWindow {
         }
     }
 
-    fn view_script_column(script_map: &BTreeMap<String, Script>) -> ThemedElement<Message> {
-        let script_items = Self::build_script_tree_items(script_map, 0);
-        
-        let mut script_list_tree = Column::new().spacing(5);
+    fn view_script_column<'a>(&self, script_map: &'a BTreeMap<String, Script>) -> ThemedElement<'a, Message> {
+        let script_items =
+            Self::build_script_tree_items(script_map, 0, self.selected_script.as_ref());
+
+        let mut script_list_tree = Column::new().spacing(5).padding(5);
         for item in script_items {
             script_list_tree = script_list_tree.push(item);
         }
@@ -872,13 +898,21 @@ impl ScriptEditorWindow {
         scrollable(script_list_tree).into()
     }
 
-    fn build_script_tree_items(
-        script_map: &BTreeMap<String, Script>, 
-        indent_level: usize
-    ) -> Vec<ThemedElement<Message>> {
+    fn build_script_tree_items<'a>(
+        script_map: &'a BTreeMap<String, Script>,
+        indent_level: usize,
+        selected_script: Option<&ScriptKey>,
+    ) -> Vec<ThemedElement<'a, Message>> {
         let mut items = Vec::new();
-        
+
         for (name, script) in script_map {
+            let is_selected = selected_script.as_ref()
+                .map(| sk| {
+                    sk.script_name.as_ref() == name && 
+                    sk.folder_name.as_ref().map(|f| f.as_ref()) == script.folder_name()
+                })
+                .unwrap_or(false);
+
             let icon = match script {
                 Script::Folder(_, _) => bootstrap_icons::FOLDER_PLUS,
                 Script::Alias(_) => bootstrap_icons::AT,
@@ -895,16 +929,18 @@ impl ScriptEditorWindow {
 
             let item_button = widget::button(
                 row![
-                    text(icon)
-                        .font(fonts::BOOTSTRAP_ICONS)
-                        .size(16.0),
+                    text(icon).font(fonts::BOOTSTRAP_ICONS).size(16.0),
                     text(name.clone())
                 ]
                 .spacing(8)
-                .align_y(Vertical::Center)
+                .align_y(Vertical::Center),
             )
-            .style(button::secondary)
-            .on_press(Message::ScriptSelected(name.clone(), script.clone()))
+            .style(if is_selected { button::list_item_selected } else { button::list_item })
+            .on_press(Message::ScriptSelected(
+                script.folder_name().map(Box::from),
+                Box::from(name.as_str()),
+                script.clone(),
+            ))
             .padding(padding)
             .width(Length::Fill);
 
@@ -912,11 +948,12 @@ impl ScriptEditorWindow {
 
             // Recursively add folder contents
             if let Script::Folder(_, folder_contents) = script {
-                let mut child_items = Self::build_script_tree_items(folder_contents, indent_level + 1);
+                let mut child_items =
+                    Self::build_script_tree_items(folder_contents, indent_level + 1, selected_script);
                 items.append(&mut child_items);
             }
         }
-        
+
         items
     }
 
@@ -928,8 +965,8 @@ impl ScriptEditorWindow {
                         .font(fonts::BOOTSTRAP_ICONS)
                         .size(24.0)
                 )
-                .style(button::secondary)
-                .on_press(Message::AddFolder),
+                .style(button::secondary),
+                // .on_press(Message::AddFolder),
                 "Create folder",
                 widget::tooltip::Position::Bottom
             ),
@@ -969,7 +1006,7 @@ impl ScriptEditorWindow {
         ]
         .spacing(10);
 
-        column![button_bar, Self::view_script_column(&self.scripts)]
+        column![button_bar, self.view_script_column(&self.scripts)]
             .height(Length::Fill)
             .width(250.0)
     }
@@ -1376,30 +1413,27 @@ impl ScriptEditorWindow {
             }))
             .push(container({
                 let mut buttons = row![];
-                
+
                 // Only show delete button for existing scripts (Edit mode)
                 if matches!(mode, ScriptEditorMode::Edit) {
                     buttons = buttons.push(
                         widget::button("Delete")
                             .style(builtins::button::secondary)
-                            .on_press(Message::DeleteScript)
+                            .on_press(Message::DeleteScript),
                     );
                     buttons = buttons.push(widget::horizontal_space());
                 }
-                
+
                 // Always show discard and save buttons
                 buttons = buttons
                     .push(
                         widget::button("Discard Changes")
                             .style(builtins::button::secondary)
-                            .on_press(Message::DiscardScriptChanges)
+                            .on_press(Message::DiscardScriptChanges),
                     )
                     .push(widget::button("Save").on_press(Message::SaveScript));
-                
-                buttons
-                    .padding(10)
-                    .spacing(20)
-                    .align_y(Vertical::Center)
+
+                buttons.padding(10).spacing(20).align_y(Vertical::Center)
             }))
     }
 

@@ -1,0 +1,15 @@
+[package]
+name = "iced_jsx"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+arc-swap = { workspace = true }
+deno_core = { workspace = true }
+deno_error = { workspace = true }
+smudgy_theme = { workspace = true }
+iced = { workspace = true }
+thiserror = "2.0.12"
+
+[lints]
+workspace = true

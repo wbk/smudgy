@@ -16,6 +16,7 @@ use deno_core::{
 
 use derive_more::{Display, Into};
 use iced::futures::channel::mpsc::Sender;
+use iced_jsx::IcedJsxRoot;
 use rustyscript::{ExtensionOptions, RustyResolver};
 use smudgy_map::Mapper;
 use tokio::sync::mpsc::UnboundedSender;
@@ -24,7 +25,10 @@ use crate::{
     get_smudgy_home,
     session::{
         SessionId, TaggedSessionEvent,
-        runtime::{ActionResult, line_operation::LineOperation, trigger::Manager},
+        runtime::{
+            ActionResult, line_operation::LineOperation, script_engine::ops::Capture,
+            trigger::Manager,
+        },
         styled_line::StyledLine,
     },
 };
@@ -34,8 +38,8 @@ use deno_core::url::Url;
 
 use super::RuntimeAction;
 
-mod ops;
 mod mapper;
+mod ops;
 
 #[derive(Display, Debug, Clone, Copy, PartialEq, Eq, Hash, Into)]
 pub struct ScriptId(usize);
@@ -52,12 +56,13 @@ pub struct ScriptEngineParams<'a> {
     pub pending_line_operations: &'a Rc<RefCell<Vec<LineOperation>>>,
     pub emitted_line_count: std::rc::Weak<Cell<usize>>,
     pub mapper: Option<Mapper>,
+    pub jsx_widgets: IcedJsxRoot<'static, (), smudgy_theme::Theme, iced::Renderer>,
+    pub tokio_runtime: Rc<tokio::runtime::Runtime>,
 }
 
 pub struct ScriptEngine<'a> {
     session_id: SessionId,
     rustyscript_runtime: rustyscript::Runtime,
-    tokio_runtime: Rc<tokio::runtime::Runtime>,
     current_line: Rc<RefCell<Weak<StyledLine>>>,
     pending_line_operations: &'a Rc<RefCell<Vec<LineOperation>>>,
     server_name: &'a Arc<String>,
@@ -108,7 +113,7 @@ impl<'a> ScriptEngine<'a> {
                     .context("File name contains invalid UTF-8")?;
 
                 // Check for .js or .ts extension
-                if file_name_str.ends_with(".js") || file_name_str.ends_with(".ts") {
+                if file_name_str.ends_with(".js") || file_name_str.ends_with(".ts")  || file_name_str.ends_with(".jsx") || file_name_str.ends_with(".tsx") {
                     let file_path = entry.path();
 
                     // Convert file path to URL
@@ -183,13 +188,6 @@ impl<'a> ScriptEngine<'a> {
     }
 
     pub fn new(params: ScriptEngineParams<'a>) -> Self {
-        let tokio_runtime = Rc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create script engine tokio runtime"),
-        );
-
         let smudgy_dir = get_smudgy_home().unwrap();
         let server_path = smudgy_dir.join(params.server_name.as_str());
 
@@ -198,15 +196,17 @@ impl<'a> ScriptEngine<'a> {
 
         let mut rustyscript_runtime = rustyscript::Runtime::with_tokio_runtime(
             rustyscript::RuntimeOptions {
-                extensions: vec![ops::smudgy_ops::init(
-                    params.session_id,
-                    script_functions.clone(),
-                    params.runtime_oob_tx.clone(),
-                    params.pending_line_operations.clone(),
-                    current_line.clone(),
-                    params.emitted_line_count.clone()
-                ),
-                mapper::smudgy_mapper::init(params.mapper.clone())
+                extensions: vec![
+                    ops::smudgy_ops::init(
+                        params.session_id,
+                        script_functions.clone(),
+                        params.runtime_oob_tx.clone(),
+                        params.pending_line_operations.clone(),
+                        current_line.clone(),
+                        params.emitted_line_count.clone(),
+                    ),
+                    mapper::smudgy_mapper::init(params.mapper.clone()),
+                    iced_jsx::ext::init(params.jsx_widgets.clone()),
                 ],
                 extension_options: ExtensionOptions {
                     webstorage_origin_storage_dir: Some(server_path.join("localstorage")),
@@ -220,7 +220,7 @@ impl<'a> ScriptEngine<'a> {
                 schema_whlist: HashSet::from(["smudgy".to_string()]),
                 ..Default::default()
             },
-            tokio_runtime.clone(),
+            params.tokio_runtime.clone(),
         )
         .expect("Failed to create JS runtime");
 
@@ -230,7 +230,7 @@ impl<'a> ScriptEngine<'a> {
             .unwrap();
 
         // Load modules from the modules directory
-        tokio_runtime.block_on(async {
+        params.tokio_runtime.block_on(async {
             if let Err(e) =
                 Self::load_modules(params.server_name.as_str(), &mut rustyscript_runtime).await
             {
@@ -240,7 +240,6 @@ impl<'a> ScriptEngine<'a> {
 
         Self {
             session_id: params.session_id,
-            tokio_runtime,
             rustyscript_runtime,
             server_name: params.server_name,
             profile_name: params.profile_name,
@@ -250,7 +249,7 @@ impl<'a> ScriptEngine<'a> {
             compiled_scripts: Vec::new(),
             pending_line_operations: params.pending_line_operations,
             current_line,
-            mapper: params.mapper
+            mapper: params.mapper,
         }
     }
 
@@ -330,7 +329,7 @@ impl<'a> ScriptEngine<'a> {
             };
 
             let elapsed = started.elapsed();
-            debug!(
+            info!(
                 "Script execution on {} took {:?}",
                 matches
                     .first()
@@ -383,6 +382,7 @@ impl<'a> ScriptEngine<'a> {
 
             let result = script.open(try_catch).run(try_catch);
 
+
             if try_catch.has_caught() {
                 let ex = try_catch.exception().unwrap();
                 let exc = ex.to_string(try_catch).unwrap();
@@ -392,6 +392,7 @@ impl<'a> ScriptEngine<'a> {
                 if value.is_string() {
                     let output = value.open(try_catch).to_rust_string_lossy(try_catch);
                     trigger_manager.process_nested_outgoing_line(output.as_str(), depth + 1)?;
+                   
                     Ok(ActionResult::None)
                 } else {
                     Ok(ActionResult::None)
@@ -419,6 +420,21 @@ impl<'a> ScriptEngine<'a> {
         self.compiled_scripts.push(script);
         Ok(script_id)
     }
+
+    pub fn set_is_captured(&mut self, value: bool) {
+        let state = self.deno_runtime().op_state();
+        let mut guard = state.borrow_mut();
+        let captured = guard.borrow_mut::<Capture>();
+        captured.0 = value;
+    }
+
+    pub fn get_is_captured(&mut self) -> bool {
+        let state = self.deno_runtime().op_state();
+        let guard = state.borrow();
+        let captured = guard.borrow::<Capture>();
+        captured.0
+    }
+
 }
 
 fn compile_javascript(scope: &mut v8::HandleScope, source: &str) -> Result<v8::Global<v8::Script>> {
@@ -459,3 +475,4 @@ fn compile_javascript(scope: &mut v8::HandleScope, source: &str) -> Result<v8::G
         }
     }
 }
+
