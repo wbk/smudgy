@@ -77,7 +77,7 @@ pub struct ScriptEngine<'a> {
 
 impl<'a> Drop for ScriptEngine<'a> {
     fn drop(&mut self) {
-        println!("Dropping script engine");
+        info!("Dropping script engine");
     }
 }
 

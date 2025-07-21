@@ -110,7 +110,7 @@ impl Connection {
                     "Connecting to {addr}..."
                 ))))
                 .unwrap();
-            trace!("Connecting to {addr}...");
+            info!("Connecting to {addr}...");
 
             match TcpStream::connect(addr).await {
                 Ok(mut stream) => {
@@ -118,7 +118,7 @@ impl Connection {
                         .send(RuntimeAction::Echo(Arc::new(format!("Connected."))))
                         .unwrap();
                     stream.set_nodelay(true).unwrap();
-                    trace!("Connected");
+                    info!("Connected");
 
                     if let Some(on_connect) = on_connect {
                         on_connect();

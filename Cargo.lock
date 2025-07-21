@@ -1143,6 +1143,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "color-art"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fb6d9ea90c36d9681d51a32de0a0e568f1cd2ce074cfe6bca2cf8dbdfe01839"
+dependencies = [
+ "lazy_static",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "color-print"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4515,7 +4527,6 @@ source = "git+https://github.com/wbk/iced?rev=983aafb24b7b5bfa95eab1efc38e9eb928
 dependencies = [
  "iced_core",
  "iced_debug",
- "iced_devtools",
  "iced_futures",
  "iced_highlighter",
  "iced_renderer",
@@ -4534,21 +4545,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced_beacon"
-version = "0.14.0-dev"
-source = "git+https://github.com/wbk/iced?rev=983aafb24b7b5bfa95eab1efc38e9eb928137b27#983aafb24b7b5bfa95eab1efc38e9eb928137b27"
-dependencies = [
- "bincode",
- "futures",
- "iced_core",
- "log",
- "semver 1.0.26",
- "serde",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "iced_core"
 version = "0.14.0-dev"
 source = "git+https://github.com/wbk/iced?rev=983aafb24b7b5bfa95eab1efc38e9eb928137b27#983aafb24b7b5bfa95eab1efc38e9eb928137b27"
@@ -4561,7 +4557,6 @@ dependencies = [
  "log",
  "num-traits",
  "rustc-hash 2.1.1",
- "serde",
  "smol_str",
  "thiserror 1.0.69",
  "web-time",
@@ -4572,20 +4567,8 @@ name = "iced_debug"
 version = "0.14.0-dev"
 source = "git+https://github.com/wbk/iced?rev=983aafb24b7b5bfa95eab1efc38e9eb928137b27#983aafb24b7b5bfa95eab1efc38e9eb928137b27"
 dependencies = [
- "iced_beacon",
  "iced_core",
  "iced_futures",
- "log",
-]
-
-[[package]]
-name = "iced_devtools"
-version = "0.14.0-dev"
-source = "git+https://github.com/wbk/iced?rev=983aafb24b7b5bfa95eab1efc38e9eb928137b27#983aafb24b7b5bfa95eab1efc38e9eb928137b27"
-dependencies = [
- "iced_debug",
- "iced_program",
- "iced_widget",
  "log",
 ]
 
@@ -4636,11 +4619,13 @@ name = "iced_jsx"
 version = "0.0.1"
 dependencies = [
  "arc-swap",
+ "color-art",
  "deno_core",
  "deno_error",
  "iced",
  "smudgy_theme",
  "thiserror 2.0.12",
+ "tokio",
 ]
 
 [[package]]
@@ -7883,9 +7868,6 @@ name = "semver"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56e6fa9c48d24d85fb3de5ad847117517440f6beceb7798af16b4a87d616b8d0"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "semver-parser"

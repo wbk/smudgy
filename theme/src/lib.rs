@@ -13,6 +13,7 @@ pub use smudgy::smudgy;
 pub mod builtins {
     pub mod button;
     pub mod container;
+    pub mod progress_bar;
     pub mod radio;
     pub mod rule;
     pub mod svg;

@@ -40,9 +40,9 @@ impl CloudMapper {
         T: serde::de::DeserializeOwned,
     {
         let url = format!("{}{}", self.base_url, path);
-        
-        info!("GET {}", url);
 
+        info!("GET {} - (initiating)", url);
+        
         let response = self
             .client
             .get(&url)
@@ -51,7 +51,10 @@ impl CloudMapper {
             .send()
             .await?;
             
+        info!("GET {} - {}", url, response.status());
+
         if response.status().is_success() {
+
             let json: serde_json::Value = response.json().await?;
             
             // Extract data field from API response

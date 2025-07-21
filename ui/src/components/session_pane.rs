@@ -19,6 +19,7 @@ use smudgy_core::session::{HotkeyId, SessionParams};
 use smudgy_core::terminal_buffer::TerminalBuffer;
 use smudgy_core::terminal_buffer::selection::Selection;
 use smudgy_map::{AreaId, CloudMapper, Mapper};
+use smudgy_theme::builtins::container::{opaque};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -115,6 +116,10 @@ impl SessionPane {
         self.connected
     }
 
+    pub fn jsx_subscription(&self) -> Subscription<SessionId> {
+        self.jsx_widgets.subscription(self.id)
+    }
+
     pub fn session_subscription(&self) -> Subscription<TaggedSessionEvent> {
         Subscription::run_with(self.session_params.clone(), |params| {
             session::spawn(params.clone())
@@ -159,6 +164,7 @@ impl SessionPane {
                         let server_config = load_server(&self.server_name.as_str())
                             .expect("Failed to load server config");
 
+                        info!("Loading Hotkeys");
                         // Load hotkeys, triggers, and aliases for this server
                         if let Ok(hotkeys) = load_hotkeys(&self.server_name) {
                             for (name, hotkey) in hotkeys {
@@ -173,6 +179,7 @@ impl SessionPane {
                             log::warn!("Failed to load hotkeys for server: {}", self.server_name);
                         }
 
+                        info!("Loading Triggers");
                         if let Ok(triggers) = load_triggers(&self.server_name) {
                             for (name, trigger) in triggers {
                                 if let Err(e) = tx.send(RuntimeAction::AddTrigger {
@@ -186,6 +193,7 @@ impl SessionPane {
                             log::warn!("Failed to load triggers for server: {}", self.server_name);
                         }
 
+                        info!("Loading Aliases");
                         if let Ok(aliases) = load_aliases(&self.server_name) {
                             for (name, alias) in aliases {
                                 if let Err(e) = tx.send(RuntimeAction::AddAlias {
@@ -263,9 +271,11 @@ impl SessionPane {
                 return Task::none();
             }
             Message::Reconnect => {
+                info!("Connecting to server");
                 self.runtime_tx.as_ref().map(|tx| {
                     let profile_config = load_profile(&self.server_name, &self.profile_name)
                         .expect("Failed to load profile config");
+
 
                     let send_on_connect = if profile_config.config.send_on_connect.is_empty() {
                         None
@@ -313,33 +323,36 @@ impl SessionPane {
         );
 
         // Wrap terminal in mouse_area to handle clicks for activation
+        let widgets = self.jsx_widgets.view(|| Box::new(opaque)).map(|_| Message::WidgetMessage);
         let clickable_terminal = mouse_area(terminal).on_press(Message::Activate);
+
+        let terminal_area = stack![
+            clickable_terminal,
+            widgets
+        ];
 
         // Map input messages to session messages
         let input = self.input.view().map(Message::Input);
 
+
         // Combine all elements in a column
         let content = if expanded {
-            column![clickable_header, clickable_terminal, input]
+            column![clickable_header, terminal_area, input]
                 .spacing(10)
                 .width(Length::Fill)
                 .height(Length::Fill)
         } else {
-            column![clickable_terminal, input]
+            column![terminal_area, input]
                 .spacing(10)
                 .width(Length::Fill)
                 .height(Length::Fill)
         };
 
-        let widgets = self.jsx_widgets.view().map(|_| Message::WidgetMessage);
 
-        stack![
             container(content)
             .padding(Padding {top: 0.0, right: 10.0, bottom: 10.0, left: 10.0})
             .width(Length::Fill)
-            .height(Length::Fill),
-            widgets
-        ].into()
+            .height(Length::Fill).into()
     }
 }
 

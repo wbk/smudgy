@@ -1,7 +1,9 @@
 use std::{rc::Rc, sync::Arc};
 
 use iced::{
-    alignment::{Horizontal, Vertical}, widget::{center, column, container, mouse_area, opaque, row, stack, text, text_input}, Color, Event as IcedEvent, Length, Subscription, Task
+    Color, Event as IcedEvent, Length, Subscription, Task,
+    alignment::{Horizontal, Vertical},
+    widget::{center, column, container, mouse_area, opaque, row, stack, text, text_input},
 };
 use smudgy_core::session::{SessionId, TaggedSessionEvent};
 use smudgy_map::{AreaId, Mapper};
@@ -76,13 +78,21 @@ impl SmudgyWindow {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let session_subscriptions = Subscription::batch(
-            self.session_panes
-                .iter()
-                .map(|session| session.session_subscription().map(Message::SessionEvent)),
-        );
+        let session_subscriptions = self
+            .session_panes
+            .iter()
+            .map(|session| session.session_subscription().map(Message::SessionEvent));
 
-        session_subscriptions
+        let jsx_subscriptions = self.session_panes.iter().map(|session| {
+            session
+                .jsx_subscription()
+                .map(|id| Message::SessionPaneUserAction {
+                    session_id: id,
+                    msg: session_pane::Message::WidgetMessage,
+                })
+        });
+
+        Subscription::batch(session_subscriptions.chain(jsx_subscriptions))
     }
 
     /// Set the active session, deactivating all others
@@ -146,7 +156,9 @@ impl SmudgyWindow {
                                 .mapper
                                 .as_ref()
                                 .map(|mapper| {
-                                    Update::with_event(Event::CreateNewMapEditorWindow { mapper: mapper.clone() })
+                                    Update::with_event(Event::CreateNewMapEditorWindow {
+                                        mapper: mapper.clone(),
+                                    })
                                 })
                                 .unwrap_or_else(|| Update::none())
                         } else {
@@ -235,7 +247,11 @@ impl SmudgyWindow {
                         } else {
                             Update::none()
                         }
-                    } else if let session_pane::Message::SetMapperCurrentLocation(area_id, room_number) = msg {
+                    } else if let session_pane::Message::SetMapperCurrentLocation(
+                        area_id,
+                        room_number,
+                    ) = msg
+                    {
                         // Handle the SetMapperCurrentLocation message that bubbles up from session inputs
                         Update::with_event(Event::SetMapperCurrentLocation(area_id, room_number))
                     } else {

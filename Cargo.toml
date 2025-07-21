@@ -4,6 +4,7 @@ resolver = "2"
 
 # Define shared dependencies for the workspace
 [workspace.dependencies]
+color-art = "0.3.0"
 arc-swap = { version = "1.7.1", features = ["weak"] }
 anyhow = "1.0.98"
 iced = { version = "0.14.0-dev", features = [
@@ -12,8 +13,7 @@ iced = { version = "0.14.0-dev", features = [
     "web-colors",
     "highlighter",
     "advanced",
-    "canvas",
-    "debug"
+    "canvas"
 ] }
 iced_anim = { git = "https://github.com/wbk/iced_anim", rev = "2a0414e" }
 derive_more = { version = "2.0.1", features = [

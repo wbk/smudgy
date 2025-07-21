@@ -183,10 +183,12 @@ impl Runtime {
             // We start at 1 because the first line ("Loading session...") is already emitted
             let emitted_line_count = Rc::new(Cell::new(0));
 
-            let runtime = Rc::new(tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime"));
+            let runtime = Rc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime"),
+            );
 
             let script_engine = ScriptEngine::new(ScriptEngineParams {
                 session_id,
@@ -241,7 +243,9 @@ impl Runtime {
                         rx
                     });
 
-                drop(inner);
+                runtime.block_on(async move {
+                    drop(inner);
+                });
 
                 // Create completely new Inner struct with fresh ScriptEngine and TriggerManager
                 // This avoids any V8 isolate replacement issues
@@ -285,9 +289,16 @@ impl Runtime {
                 info!("Session runtime reloaded successfully");
             }
 
+
+            info!("Dropping inner");
+            runtime.block_on(async move {
+                drop(inner);
+            });
+
+            info!("Unregistering session");
             registry::unregister_session(session_id);
 
-            drop(inner);
+            info!("Runtime thread shutting down");
         });
 
         RUNTIME_THREADS.lock().unwrap().push(thread);
@@ -910,6 +921,7 @@ impl<'a> Inner<'a> {
             }
         }
 
+
         if let Err(e) = self
             .ui_tx
             .send(TaggedSessionEvent {
@@ -921,14 +933,32 @@ impl<'a> Inner<'a> {
             error!("Failed to send runtime ready event: {:?}", e);
         }
 
+        info!("Starting session event loop");
+
+        let mut warned_deno_iters = 0;
+
+        const MAX_DENO_ITERS: usize = 32;
+
         loop {
+            let mut deno_iters = 0;
             // Phase 1: Poll script engine until no more immediate work is available
             std::future::poll_fn(|cx| {
                 loop {
                     match self.script_engine.poll_event_loop(cx) {
                         Poll::Ready(Ok(())) => {
-                            // Event loop completed some work, continue polling immediately
-                            continue;
+                            deno_iters += 1;
+
+                            if deno_iters < MAX_DENO_ITERS {
+                                continue;
+                            }
+
+                            if warned_deno_iters < 1000 {
+                                warn!("Deno event loop reached max iterations, deferring");
+                                warned_deno_iters += 1;
+                                continue;
+                            }
+                            
+                            return Poll::Ready(());
                         }
                         Poll::Ready(Err(err)) => {
                             warn!("Error in script engine event loop: {err:?}");

@@ -17,13 +17,13 @@ impl container::Catalog for Theme {
 
 pub fn default(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb8(0, 0, 0))),
         ..Default::default()
     }
 }
 
-pub fn plain(_theme: &Theme) -> container::Style {
+pub fn opaque(theme: &Theme) -> container::Style {
     container::Style {
+        background: Some(theme.styles.general.background.into()),
         ..Default::default()
     }
 }
