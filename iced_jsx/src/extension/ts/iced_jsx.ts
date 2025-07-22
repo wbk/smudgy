@@ -28,7 +28,7 @@ const IcedJsx = {
 
     createElement: function (type: any, props: Record<string, any>, ...children: any) {
         if (typeof type === "function") {
-            return type(props || {}, children.flat());
+            return type(props || {}, children.flat(32).filter(Boolean));
         } else {
             throw new Error("Invalid type");
         }

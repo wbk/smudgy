@@ -254,7 +254,7 @@ fn op_iced_jsx_create_row(
     spacing: Option<f32>,
     padding: Option<f32>,
 ) -> ViewFn {
-    let children = children.0.take();
+    let children = children.0.take().into_iter().map(|c| c.0).collect::<Vec<_>>();
 
     let mut attr_fns: Vec<
         Box<
@@ -296,7 +296,7 @@ fn op_iced_jsx_create_row(
     }
 
     ViewFn(Arc::new(move || {
-        let row = iced::widget::row(children.iter().map(|c| c.0()));
+        let row = iced::widget::row(children.iter().map(|c| c()));
         let row = attr_fns.iter().fold(row, |row, attr_fn| attr_fn(row));
         row.into()
     }))
